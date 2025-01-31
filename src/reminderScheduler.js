@@ -23,7 +23,7 @@ async function checkReminders() {
   });
 
   for (let reminder of reminders) {
-    bot.sendMessage(reminder.userId, `🔔 Напоминание: "${reminder.description}"`);
+    bot.sendMessage(reminder.userId, `🔔 ${reminder.description}`);
 
     if (reminder.repeat) {
       let newDate = new Date(reminder.datetime);

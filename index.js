@@ -38,10 +38,13 @@ bot.onText(/\/list/, async (msg) => {
   sendRemindersPage(chatId, userId);
 });
 
-// Функция обновления страницы с напоминаниями
+// Функция вывода страницы с напоминаниями
 function sendRemindersPage(chatId, userId) {
   const state = userState[userId];
   if (!state) return;
+
+  // Сортируем напоминания по времени (от ближайших к более поздним)
+  state.reminders.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
 
   const reminders = state.reminders;
   const page = state.page;
@@ -56,9 +59,14 @@ function sendRemindersPage(chatId, userId) {
     return;
   }
 
-  let message = '📝 Ваши активные напоминания:\n\n';
+  let message = '📝 <b>Ваши активные напоминания:</b>\n\n';
   pageReminders.forEach((reminder, index) => {
-    message += `${start + index + 1}. ${reminder.description} — ${formatDate(reminder.datetime)}\n`;
+    const num = start + index + 1;
+    const formattedTime = formatFullDate(reminder.datetime);
+    const repeatText = reminder.repeat 
+      ? `♾ <i>${getRepeatText(reminder.repeat, reminder.datetime)}</i>\n`
+      : '';
+    message += `${num}) ⌚️ ${formattedTime}\n${repeatText}〰️ ${reminder.description}\n\n`;
   });
 
   // Кнопки навигации
@@ -74,19 +82,59 @@ function sendRemindersPage(chatId, userId) {
     buttons.push({ text: '⏩', callback_data: 'last_page' });
   }
 
+  // ✅ Исправленная строка: теперь кнопка добавляется корректно
   buttons.push({ text: '❌ Удалить по номеру', callback_data: 'delete_reminder' });
 
   const keyboard = { inline_keyboard: [buttons] };
 
-  bot.editMessageText(message, {
-    chat_id: chatId,
-    message_id: state.messageId,
-    reply_markup: keyboard,
-  }).catch(() => {
-    bot.sendMessage(chatId, message, { reply_markup: keyboard }).then((sentMessage) => {
+  if (!state.messageId) {
+    bot.sendMessage(chatId, message, { parse_mode: "HTML", reply_markup: keyboard }).then((sentMessage) => {
       userState[userId].messageId = sentMessage.message_id;
     });
-  });
+  } else {
+    bot.getChat(chatId).then(() => {
+      bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: state.messageId,
+        parse_mode: "HTML",
+        reply_markup: keyboard,
+      }).catch((err) => {
+        if (err.response?.body?.description?.includes('message is not modified')) {
+          console.log('⚠️ Попытка обновить сообщение без изменений.');
+        } else {
+          console.error('❌ Ошибка при обновлении сообщения:', err);
+        }
+      });
+    });
+  }
+}
+
+// Функция форматирования даты (полный формат)
+function formatFullDate(date) {
+  const daysOfWeek = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
+  const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+
+  const d = new Date(date);
+  const day = d.getDate();
+  const month = months[d.getMonth()];
+  const year = d.getFullYear();
+  const dayOfWeek = daysOfWeek[d.getDay()];
+  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+  return `${day} ${month} ${year} г. (${dayOfWeek}) в ${time}`;
+}
+
+// Функция преобразования формата повтора
+function getRepeatText(repeat, datetime) {
+  const d = new Date(datetime);
+  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+  switch (repeat) {
+    case "daily": return `каждый день в ${time}`;
+    case "weekly": return `каждую неделю в ${time}`;
+    case "monthly": return `каждый месяц в ${time}`;
+    default: return "";
+  }
 }
 
 // Функция показа кнопок удаления (скрывает кнопки навигации)
