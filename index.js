@@ -11,6 +11,7 @@ const reminderSchema = new mongoose.Schema({
   description: String,
   datetime: Date,
   repeat: String,
+  lastNotified: Date, // Время последнего уведомления
 });
 
 const Reminder = mongoose.models.Reminder || mongoose.model('Reminder', reminderSchema);
@@ -82,7 +83,6 @@ function sendRemindersPage(chatId, userId) {
     buttons.push({ text: '⏩', callback_data: 'last_page' });
   }
 
-  // ✅ Исправленная строка: теперь кнопка добавляется корректно
   buttons.push({ text: '❌ Удалить по номеру', callback_data: 'delete_reminder' });
 
   const keyboard = { inline_keyboard: [buttons] };
