@@ -10,25 +10,30 @@ const unitsMap = {
 };
 
 function preprocessText(text) {
-  let processed = text
-    // Обрабатываем "через 3 дня", "через неделю и 2 часа"
-    .replace(/через\s+(\d+)?\s*([а-я]+)/gi, (_, num, unit) => {
-      const enUnit = unitsMap[unit.toLowerCase()] || unit;
-      return `in ${num || '1'} ${enUnit}`;
-    })
-    // Обрабатываем "в 11" или "в 11:30"
-    .replace(/в\s+(\d{1,2})(?::(\d{2}))?/gi, 'at $1:$2')
-    // Обрабатываем "и 2 часа", "и 3 дня"
-    .replace(/и\s+(\d+)\s*([а-я]+)/gi, (_, num, unit) => {
-      const enUnit = unitsMap[unit.toLowerCase()] || unit;
-      return `and ${num} ${enUnit}`;
-    });
+    let processed = text
+      // Обрабатываем "через 3 дня", "через неделю и 2 часа"
+      .replace(/через\s+(\d+)?\s*([а-я]+)\s*(и\s+(\d+)\s*([а-я]+))?/gi, (_, num1, unit1, __, num2, unit2) => {
+        const enUnit1 = unitsMap[unit1.toLowerCase()] || unit1;
+        const enUnit2 = unitsMap[unit2?.toLowerCase()] || unit2;
+        let result = `in ${num1 || '1'} ${enUnit1}`;
+        if (num2 && enUnit2) {
+          result += ` and ${num2} ${enUnit2}`;
+        }
+        return result;
+      })
+      // Обрабатываем "в 11" или "в 11:30"
+      .replace(/в\s+(\d{1,2})(?::(\d{2}))?/gi, 'at $1:$2')
+      // Обрабатываем "и 2 часа", "и 3 дня"
+      .replace(/и\s+(\d+)\s*([а-я]+)/gi, (_, num, unit) => {
+        const enUnit = unitsMap[unit.toLowerCase()] || unit;
+        return `and ${num} ${enUnit}`;
+      });
+  
+    console.log('Processed Text:', processed);
+    return processed;
+  }
 
-  console.log('Processed Text:', processed);
-  return processed;
-}
-
-function extractDate(text) {
+  function extractDate(text) {
     const processedText = preprocessText(text);
     let now = DateTime.local().setZone('UTC+3').set({ second: 0, millisecond: 0 });
     let parsedDate = now;
@@ -59,17 +64,28 @@ function extractDate(text) {
       }
     }
   
-    // Проверяем "через X минут/часов/дней"
-    const durationMatch = processedText.match(/in (\d+) (minutes|hours|days)/);
-    if (durationMatch) {
-      const amount = parseInt(durationMatch[1], 10);
-      const unit = durationMatch[2];
-      parsedDate = now.plus({ [unit]: amount });
+    // **Правильное суммирование всех интервалов, включая AND**
+    const durationMatches = [...processedText.matchAll(/in (\d+) (minutes|hours|days|weeks|months|years)/g)];
+    for (const match of durationMatches) {
+      const amount = parseInt(match[1], 10);
+      const unit = match[2];
+      parsedDate = parsedDate.plus({ [unit]: amount });
+    }
+  
+    // Дополнительная обработка "и X дней"
+    const extraDurationMatches = [...processedText.matchAll(/and (\d+) (minutes|hours|days|weeks|months|years)/g)];
+    for (const match of extraDurationMatches) {
+      const amount = parseInt(match[1], 10);
+      const unit = match[2];
+      parsedDate = parsedDate.plus({ [unit]: amount });
     }
   
     console.log('⏳ Итоговая дата:', parsedDate.toISO());
     return parsedDate.toJSDate();
   }
+  
+  
+  
   
 
 function extractRepeatPattern(text) {

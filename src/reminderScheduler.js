@@ -8,12 +8,24 @@ const reminderSchema = new mongoose.Schema({
   description: String,
   datetime: Date,
   repeat: String,
-  lastNotified: Date, // Время последнего уведомления
+  lastNotified: Date,
+  lastMessageId: Number,
 });
 
 const Reminder = mongoose.models.Reminder || mongoose.model('Reminder', reminderSchema);
 
-// Функция для отправки уведомления с кнопками
+async function removeButtonsFromMessage(chatId, messageId) {
+  try {
+    await bot.editMessageReplyMarkup(
+      { inline_keyboard: [] },
+      { chat_id: chatId, message_id: messageId }
+    );
+    console.log(`✅ Кнопки удалены из сообщения ${messageId} в чате ${chatId}`);
+  } catch (err) {
+    console.error(`❌ Ошибка при удалении кнопок из сообщения ${messageId}:`, err);
+  }
+}
+
 async function sendReminderNotification(reminder) {
   console.log(`🔔 Отправка напоминания: ${reminder.description} для пользователя ${reminder.userId} (ID: ${reminder._id})`);
   const keyboard = {
@@ -33,19 +45,18 @@ async function sendReminderNotification(reminder) {
     reply_markup: keyboard 
   });
 
-  // Обновляем время последнего уведомления
   await Reminder.updateOne(
     { _id: reminder._id },
     { lastNotified: new Date() }
   );
+
+  return message.message_id;
 }
 
-// Проверка и отправка напоминаний
 async function checkReminders() {
   const now = new Date();
   console.log(`⏳ Запуск проверки напоминаний (${now.toISOString()})`);
 
-  // Ищем напоминания, время которых наступило
   const reminders = await Reminder.find({
     datetime: { $lte: now },
   });
@@ -55,30 +66,36 @@ async function checkReminders() {
   for (const reminder of reminders) {
     console.log(`🔹 Обработка напоминания: ID ${reminder._id}, время: ${reminder.datetime}`);
 
-    // Если уведомление не отправлялось или прошло больше 9 минут
     if (!reminder.lastNotified || (now - reminder.lastNotified) > 540000) {
-      await sendReminderNotification(reminder);
+      if (reminder.lastMessageId) {
+        await removeButtonsFromMessage(reminder.userId, reminder.lastMessageId);
+      }
 
-      // Обновляем время напоминания на +9 минут
+      const messageId = await sendReminderNotification(reminder);
+
       const newTime = new Date(Date.now() + 9 * 60000);
       console.log(`🔄 Обновляем время напоминания ID: ${reminder._id} -> ${newTime}`);
       await Reminder.updateOne(
         { _id: reminder._id },
-        { datetime: newTime }
+        { datetime: newTime, lastMessageId: messageId }
       );
     }
   }
 }
 
-// Запускаем проверку каждую минуту
 schedule.scheduleJob('* * * * *', checkReminders);
 
-// Обработка кнопок
 bot.on('callback_query', async (callbackQuery) => {
   console.log(`🔘 Получен callback: ${callbackQuery.data}`);
+  const navigationActions = ['first_page', 'prev_page', 'next_page', 'last_page'];
+
+  if (navigationActions.includes(callbackQuery.data)) {
+    return bot.answerCallbackQuery(callbackQuery.id);
+  }
+
   const parts = callbackQuery.data.split('_');
-  const action = parts[0];
-  const reminderId = parts.slice(-1)[0];
+  const reminderId = parts.pop();
+  const action = parts.join('_');
 
   console.log(`🔍 Разобранный callback -> Действие: ${action}, ID напоминания: ${reminderId}`);
 
@@ -94,32 +111,22 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 
   switch (action) {
-    case 'snooze':
-      const hours = parseInt(parts[1].replace('h', ''), 10);
+    case 'snooze_1h':
+    case 'snooze_3h':
+      const hours = parseInt(action.replace('snooze_', '').replace('h', ''), 10);
       const newDate = new Date(Date.now() + hours * 3600000);
-      console.log(`⏳ Перенос напоминания ID: ${reminderId} на ${newDate}`);
       await Reminder.updateOne(
         { _id: reminderId },
         { datetime: newDate }
       );
-      bot.editMessageReplyMarkup(
-        { inline_keyboard: [] },
-        { chat_id: callbackQuery.message.chat.id, message_id: callbackQuery.message.message_id }
-      ).catch(() => {});
-      bot.sendMessage(callbackQuery.message.chat.id, `✅ Напоминание сохранено:\n\n📌 ${reminder.description}\n🔁 Повтор: ${reminder.repeat ? reminder.repeat : 'нет'}\n🕒 ${newDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })} (${newDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })})`);
+      bot.sendMessage(callbackQuery.message.chat.id, `✅ Напоминание перенесено на ${newDate.toLocaleString()}`);
       break;
 
-    case 'custom':
-      console.log(`📝 Запрос на ввод времени для ID: ${reminderId}`);
-      bot.editMessageReplyMarkup(
-        { inline_keyboard: [] },
-        { chat_id: callbackQuery.message.chat.id, message_id: callbackQuery.message.message_id }
-      );
-      await bot.sendMessage(callbackQuery.message.chat.id, 'Введите время для повтора (например, "через 2 часа" или "завтра в 10:00"):');
+    case 'custom_snooze':
+      bot.sendMessage(callbackQuery.message.chat.id, 'Введите время для переноса (например, "через 2 часа")');
       break;
 
     case 'done':
-      console.log(`✅ Напоминание ID: ${reminderId} отмечено как выполненное и удалено.`);
       await Reminder.deleteOne({ _id: reminderId });
       bot.deleteMessage(callbackQuery.message.chat.id, callbackQuery.message.message_id).catch(() => {});
       bot.sendMessage(callbackQuery.message.chat.id, '✅ Напоминание выполнено и удалено.');
@@ -128,3 +135,8 @@ bot.on('callback_query', async (callbackQuery) => {
 
   bot.answerCallbackQuery(callbackQuery.id);
 });
+
+module.exports = {
+  checkReminders,
+  removeButtonsFromMessage,
+};
