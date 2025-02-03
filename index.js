@@ -274,7 +274,7 @@ bot.on('message', async (msg) => {
   const repeatText = repeatPattern ? `🔁 Повтор: ${getRepeatText(repeatPattern, parsedDate)}` : '🔁 Повтор: нет';
   const formattedDate = formatDate(parsedDate);
 
-  bot.sendMessage(chatId, `✅ Напоминание сохранено:\n\n📌 ${description}\n${repeatText}\n🕒 ${formattedDate}`, { parse_mode: "HTML" });
+  bot.sendMessage(chatId, `✅ Напоминание сохранено:\n\n📌 <b>${description}</b>\n${repeatText}\n🕒 ${formattedDate}`, { parse_mode: "HTML" });
 });
 
 function formatDate(date) {
