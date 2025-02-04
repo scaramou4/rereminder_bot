@@ -1,7 +1,8 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const bot = require('./src/botInstance');
-const { extractDate, extractRepeatPattern, extractReminderText } = require('./src/dateParser');
+// Импортируем новую функцию для парсинга напоминаний
+const { parseReminderText, extractRepeatPattern } = require('./src/dateParser');
 require('./src/reminderScheduler');
 
 mongoose.connect('mongodb://127.0.0.1:27017/reminderBot');
@@ -249,9 +250,10 @@ bot.on('message', async (msg) => {
 
   if (text.startsWith('/')) return;
 
-  let parsedDate = extractDate(text);
+  // Используем новую функцию, которая разделяет текст по ключевому слову "напомни"
+  // и возвращает объект { date, text }
+  let { date: parsedDate, text: description } = parseReminderText(text);
   let repeatPattern = extractRepeatPattern(text);
-  let description = extractReminderText(text);
 
   if (!parsedDate && !repeatPattern) {
     return bot.sendMessage(chatId, '⛔ Не удалось понять дату или время. Попробуй снова.');
@@ -287,7 +289,7 @@ bot.onText(/\/start/, async (msg) => {
 
   const welcomeMessage = `👋 Привет, ${firstName}!\n\nЯ твой бот-напоминалка. 
 Ты можешь добавлять напоминания, просматривать их и управлять ими.\n\n
-🔹 Отправь мне текст напоминания, например: "Завтра в 10 купить молоко".\n
+🔹 Отправь мне текст напоминания, например: "Завтра в 10 купить молоко" или "завтра в 19 напомни завтра в 10 к врачу".\n
 🔹 Используй /list, чтобы посмотреть все активные напоминания.\n`;
 
   bot.sendMessage(chatId, welcomeMessage);
