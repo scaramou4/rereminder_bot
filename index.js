@@ -1,5 +1,6 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
+const { DateTime } = require('luxon'); // Импортируем Luxon для работы с временем
 const bot = require('./src/botInstance');
 // Импортируем новую функцию для парсинга напоминаний
 const { parseReminderText, extractRepeatPattern } = require('./src/dateParser');
@@ -71,22 +72,22 @@ function sendRemindersPage(chatId, userId) {
     message += `${num}) ⌚️ ${formattedTime}\n${repeatText}〰️ ${reminder.description}\n\n`;
   });
 
-  // Кнопки навигации
-  const totalPages = Math.ceil(reminders.length / 10);
-  const buttons = [];
-
-  if (page > 0) {
-    buttons.push({ text: '⏪', callback_data: 'first_page' });
-    buttons.push({ text: '◀', callback_data: 'prev_page' });
-  }
-  if (page < totalPages - 1) {
-    buttons.push({ text: '▶', callback_data: 'next_page' });
-    buttons.push({ text: '⏩', callback_data: 'last_page' });
-  }
-
-  buttons.push({ text: '❌ Удалить по номеру', callback_data: 'delete_reminder' });
-
-  const keyboard = { inline_keyboard: [buttons] };
+  // Формируем клавиатуру из двух строк:
+  // 1-я строка — кнопки "Назад" и "Вперёд"
+  // 2-я строка — кнопки "В начало", "В конец" и "Удалить"
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '◀ Назад', callback_data: 'prev_page' },
+        { text: 'Вперёд ▶', callback_data: 'next_page' }
+      ],
+      [
+        { text: '⏪ В начало', callback_data: 'first_page' },
+        { text: '⏩ В конец', callback_data: 'last_page' },
+        { text: '🗑 Удалить', callback_data: 'delete_reminder' }
+      ]
+    ]
+  };
 
   if (!state.messageId) {
     bot.sendMessage(chatId, message, { parse_mode: "HTML", reply_markup: keyboard }).then((sentMessage) => {
@@ -255,11 +256,9 @@ bot.on('message', async (msg) => {
   let { date: parsedDate, text: description } = parseReminderText(text);
   let repeatPattern = extractRepeatPattern(text);
 
-  if (!parsedDate && !repeatPattern) {
-    return bot.sendMessage(chatId, '⛔ Не удалось понять дату или время. Попробуй снова.');
-  }
-
-  if (parsedDate < new Date()) {
+  // Получаем текущее время в зоне UTC+3 для корректного сравнения
+  const nowUTC3 = DateTime.local().setZone('UTC+3').toJSDate();
+  if (parsedDate < nowUTC3) {
     return bot.sendMessage(chatId, '⏳ Событие в прошлом. Введите корректную дату и время.');
   }
 
