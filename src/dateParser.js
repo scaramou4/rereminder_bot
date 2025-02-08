@@ -1,5 +1,5 @@
 const { DateTime } = require('luxon');
-const logger = require('./logger'); // Если logger.js находится в той же папке (src)
+const logger = require('./logger'); // Файл logger.js лежит в папке src
 
 const unitsMap = {
   'минут': 'minutes', 'минуту': 'minutes', 'минуты': 'minutes',
@@ -14,8 +14,8 @@ const unitsMap = {
  * Функция parseReminder разбивает входной текст на две части: timeSpec и reminderText.
  * Если ввод состоит только из числа (например, "30"), то интерпретируется как "через 30 минут".
  *
- * Добавлен новый блок для абсолютного времени, начинающегося со слова "в" – тогда timeSpec
- * будет содержать только время (например, "в 19"), а всё, что идёт после, – как reminder text.
+ * Новый блок для обработки дней недели использует регулярное выражение, которое позволяет
+ * отделить часть, соответствующую времени, от остатка, который станет описанием.
  */
 function parseReminder(input) {
   input = input.trim();
@@ -25,29 +25,23 @@ function parseReminder(input) {
     return { timeSpec: `через ${input} минут`, reminderText: "" };
   }
   
-  // Если ввод начинается с "в" и соответствует абсолютному времени
-  const absoluteTimeRegex = /^(в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)(\s+.*)?$/i;
-  const absMatch = input.match(absoluteTimeRegex);
-  if (absMatch) {
-    // Например, для "в 19 проза": group1 = "в 19", group2 = "проза"
-    return { timeSpec: absMatch[1].trim(), reminderText: (absMatch[2] || "").trim() };
+  // Если ввод начинается со слова "в" или "во" или "каждый/каждую" и содержит день недели,
+  // используем специальное регулярное выражение.
+  const weekdayRegex = /^(?<time>(?:(?:в(?:о)?|каждый|каждую)\s+(?:понедельник|вторник|среда|четверг|пятница|суббота|воскресенье)(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?))\b(?<rest>.*)$/i;
+  const weekdayMatch = input.match(weekdayRegex);
+  if (weekdayMatch && weekdayMatch.groups) {
+    return {
+      timeSpec: weekdayMatch.groups.time.trim(),
+      reminderText: weekdayMatch.groups.rest.trim()
+    };
   }
   
-  // Если ввод начинается со слова "через", пробуем захватить всю конструкцию
+  // Если ввод начинается со слова "через", пытаемся захватить всю конструкцию
   if (/^через\s+/i.test(input)) {
     const match = input.match(/^(через(?:\s+\d+(?:[.,]\d+)?\s+[а-я]+)+)\s*(.*)$/i);
     if (match) {
       return { timeSpec: match[1].trim(), reminderText: match[2].trim() };
     }
-  }
-  
-  // Для повторяющихся напоминаний (например, "каждый день", "каждый час", "каждую неделю" и т.п.)
-  const repeatingRegex = /^(?<time>(?:каждый(?:\s+\d+)?\s+час|каждый день|каждую неделю|каждый месяц|каждый год)(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?)(?<rest>\s+.*)?$/i;
-  const repMatch = input.match(repeatingRegex);
-  if (repMatch && repMatch.groups) {
-    const timeSpec = repMatch.groups.time.trim();
-    const reminderText = repMatch.groups.rest ? repMatch.groups.rest.trim() : "";
-    return { timeSpec, reminderText };
   }
   
   // Если встречается ключевое слово "напомни(ть)", разделяем по нему
