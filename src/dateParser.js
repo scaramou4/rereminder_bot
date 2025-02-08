@@ -13,9 +13,9 @@ const unitsMap = {
  * Функция parseReminder разбивает входной текст на две части: timeSpec и reminderText.
  * Если ввод состоит только из числа (например, "30"), то интерпретируется как "через 30 минут".
  *
- * Если текст начинается со слова "через", применяется специальное регулярное выражение,
- * которое захватывает всю последовательность вида "через <число> <слово>" (например, "через 3 часа 21 минуту"),
- * а остаток (если есть) возвращается как reminder text.
+ * Для повторяющихся напоминаний (начинающихся с "каждый час", "каждый день", "каждую неделю",
+ * "каждый месяц" или "каждый год") применяется специальное регулярное выражение, которое отделяет
+ * часть, отвечающую за время, от остатка (который будет использоваться как описание).
  */
 function parseReminder(input) {
   input = input.trim();
@@ -26,11 +26,19 @@ function parseReminder(input) {
   
   // Если ввод начинается с "через", пытаемся захватить всю конструкцию
   if (/^через\s+/i.test(input)) {
-    // Захватываем "через" и один или более блоков вида " <число> <слово>"
     const match = input.match(/^(через(?:\s+\d+(?:[.,]\d+)?\s+[а-я]+)+)\s*(.*)$/i);
     if (match) {
       return { timeSpec: match[1].trim(), reminderText: match[2].trim() };
     }
+  }
+  
+  // Для повторяющихся напоминаний (включая "каждый час", "каждый день", "каждую неделю", "каждый месяц", "каждый год")
+  const repeatingRegex = /^(?<time>(?:каждый(?:\s+\d+)?\s+час|каждый день|каждую неделю|каждый месяц|каждый год)(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?)(?<rest>\s+.*)?$/i;
+  const repMatch = input.match(repeatingRegex);
+  if (repMatch && repMatch.groups) {
+    const timeSpec = repMatch.groups.time.trim();
+    const reminderText = repMatch.groups.rest ? repMatch.groups.rest.trim() : "";
+    return { timeSpec, reminderText };
   }
   
   // Если встречается ключевое слово "напомни(ть)", разделяем по нему
@@ -43,13 +51,14 @@ function parseReminder(input) {
   }
   
   // Фоллбэк: пытаемся выделить timeSpec через регулярное выражение для абсолютных конструкций
-  const timeSpecRegex = /^(?:(?:каждый день|каждую неделю|каждый месяц|каждый год)(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?(?:\s+(?:утром|вечером|днем|ночи|полдник|рота))?)?|завтра(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?(?:\s+(?:утром|вечером|днем|ночи))?)?|послезавтра(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?(?:\s+(?:утром|вечером|днем|ночи))?)?|через\s*(?:\d+(?:[.,]\d+)?\s*)?[а-я]+(?:\s+и\s+\d+\s*[а-я]+)*(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?)(?=\s|$)/i;
+  const timeSpecRegex = /^(?:(?:завтра|послезавтра)(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?|через\s*(?:\d+(?:[.,]\d+)?\s*)?[а-я]+(?:\s+и\s+\d+\s*[а-я]+)*(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?)(?=\s|$)/i;
   const match = input.match(timeSpecRegex);
   if (match) {
     const timeSpec = match[0].trim();
     const reminderText = input.slice(match[0].length).trim();
     return { timeSpec, reminderText };
   }
+  
   return { timeSpec: input, reminderText: input };
 }
 
@@ -94,7 +103,7 @@ function extractDateFromSpec(timeSpec) {
     parsedDate = parsedDate.set({ hour: hours, minute: minutes });
   }
   
-  // Если timeSpec содержит "через", это относительное время – не добавляем дополнительный день
+  // Если timeSpec содержит слово "через", это относительное время – не добавляем дополнительный день
   if (!/через/i.test(timeSpec)) {
     if (/каждый/i.test(timeSpec)) {
       if (parsedDate <= now) {
@@ -128,6 +137,7 @@ function extractDateFromSpec(timeSpec) {
 }
 
 function extractRepeatPattern(text) {
+  if (/каждый(?:\s+\d+)?\s+час/i.test(text)) return "каждый час";
   if (/каждый день/i.test(text)) return "каждый день";
   if (/каждую неделю/i.test(text)) return "каждую неделю";
   if (/каждый месяц/i.test(text)) return "каждый месяц";
@@ -141,10 +151,10 @@ module.exports = {
     let { timeSpec, reminderText } = parseReminder(input);
     console.log("Extracted timeSpec:", timeSpec);
     const date = extractDateFromSpec(timeSpec);
-    // Если reminderText совпадает с timeSpec, оставляем его пустым; иначе – оставляем остаток
+    // Если reminderText совпадает с timeSpec, оставляем его пустым; иначе оставляем остаток.
     let finalText = (reminderText && reminderText !== timeSpec) ? reminderText : "";
     finalText = finalText.trim();
-    // Если полученное reminderText совпадает с известными модификаторами, очищаем его
+    // Если полученное reminderText является одним из стандартных модификаторов, очищаем его.
     const timeModifiers = ["утром", "вечером", "днем", "ночи", "полдник", "рота"];
     if (timeModifiers.includes(finalText.toLowerCase())) {
       finalText = "";

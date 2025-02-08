@@ -36,6 +36,7 @@ function formatDate(date) {
 }
 
 function getRepeatDisplay(text) {
+  if (/каждый(?:\s+\d+)?\s+час/i.test(text)) return 'каждый час';
   if (/каждый день/i.test(text)) return 'каждый день';
   if (/каждую неделю/i.test(text)) return 'каждую неделю';
   if (/каждый месяц/i.test(text)) return 'каждый месяц';
@@ -61,7 +62,7 @@ function sendRemindersPage(chatId, userId) {
   
   let message = '📝 <b>Ваши активные напоминания:</b>\n\n';
   pageReminders.forEach((reminder, index) => {
-    const num = start + index + 1; // Глобальный номер
+    const num = start + index + 1; // глобальный номер
     const formattedTime = formatFullDate(reminder.datetime);
     const repeatText = reminder.repeat ? `♾ <i>${reminder.repeat}</i>\n` : '';
     message += `${num}) ⌚️ ${formattedTime}\n${repeatText}〰️ ${reminder.description}\n\n`;
@@ -106,7 +107,7 @@ function showDeleteButtons(chatId, userId) {
   const buttons = [];
   let row = [];
   pageReminders.forEach((_, idx) => {
-    const globalNumber = start + idx + 1; // Глобальный номер в общем списке
+    const globalNumber = start + idx + 1; // глобальный номер
     row.push({ text: String(globalNumber), callback_data: `del_${globalNumber}` });
     if (row.length === 5) {
       buttons.push(row);
@@ -142,7 +143,7 @@ bot.on('callback_query', async (callbackQuery) => {
   const userId = callbackQuery.from.id;
   const messageId = callbackQuery.message.message_id;
   
-  // Приоритет для кнопок отложения и "Готово"
+  // Обработка кнопок отложения и "Готово"
   if (data.startsWith('postpone_') || data.startsWith('done_')) {
     if (data.startsWith('postpone_')) {
       const parts = data.split('_');
@@ -217,9 +218,9 @@ bot.on('callback_query', async (callbackQuery) => {
       await bot.answerCallbackQuery(callbackQuery.id);
       return;
     } else if (data.startsWith('del_')) {
-      // Здесь теперь извлекаем глобальный номер из callback_data
+      // Извлекаем глобальный номер из callback_data и вычисляем индекс (номера начинаются с 1)
       const globalNumber = parseInt(data.split('_')[1], 10);
-      const globalIndex = globalNumber - 1; // Номера начинаются с 1
+      const globalIndex = globalNumber - 1;
       if (globalIndex < 0 || globalIndex >= userState[userId].reminders.length) {
         await bot.answerCallbackQuery(callbackQuery.id, { text: 'Некорректный номер.' });
         return;
@@ -268,7 +269,7 @@ bot.on('message', async (msg) => {
       if (!reminder) {
         return bot.sendMessage(chatId, 'Напоминание не найдено для отложения.');
       }
-      // Вычисляем новое время через parseReminderText; описание остается прежним
+      // Вычисляем новое время через parseReminderText (описание остается прежним)
       const { date: newDatetime } = parseReminderText(text);
       if (!newDatetime || newDatetime < new Date()) {
         return bot.sendMessage(chatId, 'Неверное или прошедшее время. Попробуйте ещё раз.');
