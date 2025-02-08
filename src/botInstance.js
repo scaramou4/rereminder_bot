@@ -8,6 +8,7 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 bot.setMyCommands([
   { command: '/start', description: 'Запуск бота' },
   { command: '/list', description: 'Показать активные напоминания' },
+  { command: '/clearlist', description: 'Удалить все напоминания' }
 ]).then(() => {
     console.log("✅ Команды бота обновлены.");
   }).catch((err) => {
