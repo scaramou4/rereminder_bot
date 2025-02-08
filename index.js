@@ -18,7 +18,7 @@ const reminderSchema = new mongoose.Schema({
 const Reminder = mongoose.models.Reminder || mongoose.model('Reminder', reminderSchema);
 
 // Глобальные состояния для управления режимами
-const userState = {};             // для команды /list (пагинация, навигация)
+const userState = {};             // для /list (пагинация, навигация)
 const postponeCustomState = {};   // для произвольного переноса ("...")
 const clearListState = {};        // для команды /clearlist
 

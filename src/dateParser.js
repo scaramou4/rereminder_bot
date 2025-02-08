@@ -1,5 +1,5 @@
 const { DateTime } = require('luxon');
-const logger = require('./logger'); // Если logger.js находится в той же папке src
+const logger = require('./logger'); // Если logger.js находится в той же папке (src)
 
 const unitsMap = {
   'минут': 'minutes', 'минуту': 'minutes', 'минуты': 'minutes',
@@ -12,16 +12,25 @@ const unitsMap = {
 
 /**
  * Функция parseReminder разбивает входной текст на две части: timeSpec и reminderText.
- * Если ввод состоит только из числа (например, "30"), интерпретируется как "через 30 минут".
+ * Если ввод состоит только из числа (например, "30"), то интерпретируется как "через 30 минут".
  *
- * Для конструкций с указанием дня недели (например, "в понедельник в 10 тест" или "каждый понедельник в 11")
- * используется отдельное регулярное выражение, которое отделяет часть с днём недели и временем от описания.
+ * Добавлен новый блок для абсолютного времени, начинающегося со слова "в" – тогда timeSpec
+ * будет содержать только время (например, "в 19"), а всё, что идёт после, – как reminder text.
  */
 function parseReminder(input) {
   input = input.trim();
+  
   // Если введено только число, интерпретируем как минуты
   if (/^\d+$/.test(input)) {
     return { timeSpec: `через ${input} минут`, reminderText: "" };
+  }
+  
+  // Если ввод начинается с "в" и соответствует абсолютному времени
+  const absoluteTimeRegex = /^(в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)(\s+.*)?$/i;
+  const absMatch = input.match(absoluteTimeRegex);
+  if (absMatch) {
+    // Например, для "в 19 проза": group1 = "в 19", group2 = "проза"
+    return { timeSpec: absMatch[1].trim(), reminderText: (absMatch[2] || "").trim() };
   }
   
   // Если ввод начинается со слова "через", пробуем захватить всю конструкцию
@@ -32,14 +41,13 @@ function parseReminder(input) {
     }
   }
   
-  // Если ввод начинается с "в" или с "каждый/каждую" и содержит один из дней недели,
-  // используем специальное регулярное выражение для отделения timeSpec и reminderText.
-  const weekdayRegex = /^(?<time>(?:(?:в|каждый|каждую)\s+(?:понедельник|вторник|среда|четверг|пятница|суббота|воскресенье)(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?))(?<rest>\s+.*)?$/i;
-  const weekdayMatch = input.match(weekdayRegex);
-  if (weekdayMatch && weekdayMatch.groups) {
-    // timeSpec будет содержать, например, "в понедельник в 10" или "каждый понедельник в 11"
-    // а remainder (если есть) — это описание
-    return { timeSpec: weekdayMatch.groups.time.trim(), reminderText: (weekdayMatch.groups.rest || "").trim() };
+  // Для повторяющихся напоминаний (например, "каждый день", "каждый час", "каждую неделю" и т.п.)
+  const repeatingRegex = /^(?<time>(?:каждый(?:\s+\d+)?\s+час|каждый день|каждую неделю|каждый месяц|каждый год)(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?)(?<rest>\s+.*)?$/i;
+  const repMatch = input.match(repeatingRegex);
+  if (repMatch && repMatch.groups) {
+    const timeSpec = repMatch.groups.time.trim();
+    const reminderText = repMatch.groups.rest ? repMatch.groups.rest.trim() : "";
+    return { timeSpec, reminderText };
   }
   
   // Если встречается ключевое слово "напомни(ть)", разделяем по нему
@@ -59,7 +67,6 @@ function parseReminder(input) {
     const reminderText = input.slice(match[0].length).trim();
     return { timeSpec, reminderText };
   }
-  
   return { timeSpec: input, reminderText: input };
 }
 
@@ -93,7 +100,7 @@ function preprocessText(text) {
  */
 function extractDateFromSpec(timeSpec) {
   let now = DateTime.local().setZone('UTC+3').set({ second: 0, millisecond: 0 });
-  
+
   // Обработка дней недели
   const weekdayRegex = /(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье)/i;
   if (weekdayRegex.test(timeSpec)) {
@@ -108,7 +115,7 @@ function extractDateFromSpec(timeSpec) {
     };
     const dayMatch = timeSpec.match(weekdayRegex);
     const targetWeekday = weekdaysMap[dayMatch[1].toLowerCase()];
-    // Извлекаем время (например, "в 10" или "в 10:00")
+    // Извлекаем время после дня недели (например, "в 10" или "в 10:00")
     const timeMatch = timeSpec.match(/в\s+(\d{1,2})(?::(\d{2}))?/i);
     let hour = 0, minute = 0;
     if (timeMatch) {
@@ -117,9 +124,8 @@ function extractDateFromSpec(timeSpec) {
         minute = parseInt(timeMatch[2], 10);
       }
     }
-    const currentWeekday = now.weekday; // Monday = 1, ..., Sunday = 7
+    const currentWeekday = now.weekday; // Monday=1, ..., Sunday=7
     let daysToAdd = targetWeekday - currentWeekday;
-    // Если выбранный день уже прошёл сегодня, или сегодня – но время уже прошло, добавляем 7 дней
     if (daysToAdd < 0 || (daysToAdd === 0 && (now.hour > hour || (now.hour === hour && now.minute >= minute)))) {
       daysToAdd += 7;
     }
