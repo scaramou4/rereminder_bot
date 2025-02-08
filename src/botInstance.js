@@ -1,4 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api');
+const logger = require('./logger');
 require('dotenv').config();
 
 // Создаём бота

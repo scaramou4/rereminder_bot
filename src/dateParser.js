@@ -1,4 +1,5 @@
 const { DateTime } = require('luxon');
+const logger = require('./logger'); // Если logger.js находится в той же папке src
 
 const unitsMap = {
   'минут': 'minutes', 'минуту': 'minutes', 'минуты': 'minutes',
@@ -11,11 +12,10 @@ const unitsMap = {
 
 /**
  * Функция parseReminder разбивает входной текст на две части: timeSpec и reminderText.
- * Если ввод состоит только из числа (например, "30"), то интерпретируется как "через 30 минут".
+ * Если ввод состоит только из числа (например, "30"), интерпретируется как "через 30 минут".
  *
- * Для повторяющихся напоминаний (начинающихся с "каждый час", "каждый день", "каждую неделю",
- * "каждый месяц" или "каждый год") применяется специальное регулярное выражение, которое отделяет
- * часть, отвечающую за время, от остатка (который будет использоваться как описание).
+ * Для конструкций с указанием дня недели (например, "в понедельник в 10 тест" или "каждый понедельник в 11")
+ * используется отдельное регулярное выражение, которое отделяет часть с днём недели и временем от описания.
  */
 function parseReminder(input) {
   input = input.trim();
@@ -24,7 +24,7 @@ function parseReminder(input) {
     return { timeSpec: `через ${input} минут`, reminderText: "" };
   }
   
-  // Если ввод начинается с "через", пытаемся захватить всю конструкцию
+  // Если ввод начинается со слова "через", пробуем захватить всю конструкцию
   if (/^через\s+/i.test(input)) {
     const match = input.match(/^(через(?:\s+\d+(?:[.,]\d+)?\s+[а-я]+)+)\s*(.*)$/i);
     if (match) {
@@ -32,13 +32,14 @@ function parseReminder(input) {
     }
   }
   
-  // Для повторяющихся напоминаний (включая "каждый час", "каждый день", "каждую неделю", "каждый месяц", "каждый год")
-  const repeatingRegex = /^(?<time>(?:каждый(?:\s+\d+)?\s+час|каждый день|каждую неделю|каждый месяц|каждый год)(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?)(?<rest>\s+.*)?$/i;
-  const repMatch = input.match(repeatingRegex);
-  if (repMatch && repMatch.groups) {
-    const timeSpec = repMatch.groups.time.trim();
-    const reminderText = repMatch.groups.rest ? repMatch.groups.rest.trim() : "";
-    return { timeSpec, reminderText };
+  // Если ввод начинается с "в" или с "каждый/каждую" и содержит один из дней недели,
+  // используем специальное регулярное выражение для отделения timeSpec и reminderText.
+  const weekdayRegex = /^(?<time>(?:(?:в|каждый|каждую)\s+(?:понедельник|вторник|среда|четверг|пятница|суббота|воскресенье)(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?))(?<rest>\s+.*)?$/i;
+  const weekdayMatch = input.match(weekdayRegex);
+  if (weekdayMatch && weekdayMatch.groups) {
+    // timeSpec будет содержать, например, "в понедельник в 10" или "каждый понедельник в 11"
+    // а remainder (если есть) — это описание
+    return { timeSpec: weekdayMatch.groups.time.trim(), reminderText: (weekdayMatch.groups.rest || "").trim() };
   }
   
   // Если встречается ключевое слово "напомни(ть)", разделяем по нему
@@ -50,7 +51,7 @@ function parseReminder(input) {
     return { timeSpec, reminderText };
   }
   
-  // Фоллбэк: пытаемся выделить timeSpec через регулярное выражение для абсолютных конструкций
+  // Фолбэк: общее регулярное выражение для абсолютных конструкций
   const timeSpecRegex = /^(?:(?:завтра|послезавтра)(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?|через\s*(?:\d+(?:[.,]\d+)?\s*)?[а-я]+(?:\s+и\s+\d+\s*[а-я]+)*(?:\s+в\s+\d{1,2}(?:(?:[:.,-])\d{1,2})?)?)(?=\s|$)/i;
   const match = input.match(timeSpecRegex);
   if (match) {
@@ -81,13 +82,53 @@ function preprocessText(text) {
       const enUnit = unitsMap[unit.toLowerCase()] || unit;
       return `and ${num} ${enUnit}`;
     });
-  console.log('Processed Text:', processed);
+  logger.info(`Preprocessed text: ${processed}`);
   return processed;
 }
 
+/**
+ * Функция extractDateFromSpec сначала проверяет, содержит ли timeSpec указание дня недели.
+ * Если да, вычисляется ближайшая дата для указанного дня недели с указанным временем.
+ * Иначе используется стандартная логика (завтра, послезавтра, через ...).
+ */
 function extractDateFromSpec(timeSpec) {
-  const processedText = preprocessText(timeSpec);
   let now = DateTime.local().setZone('UTC+3').set({ second: 0, millisecond: 0 });
+  
+  // Обработка дней недели
+  const weekdayRegex = /(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье)/i;
+  if (weekdayRegex.test(timeSpec)) {
+    const weekdaysMap = {
+      'понедельник': 1,
+      'вторник': 2,
+      'среда': 3,
+      'четверг': 4,
+      'пятница': 5,
+      'суббота': 6,
+      'воскресенье': 7
+    };
+    const dayMatch = timeSpec.match(weekdayRegex);
+    const targetWeekday = weekdaysMap[dayMatch[1].toLowerCase()];
+    // Извлекаем время (например, "в 10" или "в 10:00")
+    const timeMatch = timeSpec.match(/в\s+(\d{1,2})(?::(\d{2}))?/i);
+    let hour = 0, minute = 0;
+    if (timeMatch) {
+      hour = parseInt(timeMatch[1], 10);
+      if (timeMatch[2]) {
+        minute = parseInt(timeMatch[2], 10);
+      }
+    }
+    const currentWeekday = now.weekday; // Monday = 1, ..., Sunday = 7
+    let daysToAdd = targetWeekday - currentWeekday;
+    // Если выбранный день уже прошёл сегодня, или сегодня – но время уже прошло, добавляем 7 дней
+    if (daysToAdd < 0 || (daysToAdd === 0 && (now.hour > hour || (now.hour === hour && now.minute >= minute)))) {
+      daysToAdd += 7;
+    }
+    logger.info(`Weekday detected in timeSpec "${timeSpec}". Next ${dayMatch[1]} will be in ${daysToAdd} day(s) at ${hour}:${minute}`);
+    return now.plus({ days: daysToAdd }).set({ hour, minute }).toJSDate();
+  }
+  
+  // Стандартная обработка
+  const processedText = preprocessText(timeSpec);
   let parsedDate = now;
   
   if (/послезавтра/i.test(timeSpec)) {
@@ -103,7 +144,6 @@ function extractDateFromSpec(timeSpec) {
     parsedDate = parsedDate.set({ hour: hours, minute: minutes });
   }
   
-  // Если timeSpec содержит слово "через", это относительное время – не добавляем дополнительный день
   if (!/через/i.test(timeSpec)) {
     if (/каждый/i.test(timeSpec)) {
       if (parsedDate <= now) {
@@ -132,7 +172,7 @@ function extractDateFromSpec(timeSpec) {
     parsedDate = parsedDate.plus({ [unit]: amount });
   }
   
-  console.log('⏳ Итоговая дата:', parsedDate.toISO());
+  logger.info(`Extracted date from spec "${timeSpec}": ${parsedDate.toISO()}`);
   return parsedDate.toJSDate();
 }
 
@@ -147,21 +187,19 @@ function extractRepeatPattern(text) {
 
 module.exports = {
   parseReminderText(input) {
-    console.log("User input:", input);
+    logger.info(`User input: ${input}`);
     let { timeSpec, reminderText } = parseReminder(input);
-    console.log("Extracted timeSpec:", timeSpec);
+    logger.info(`Extracted timeSpec: ${timeSpec}`);
     const date = extractDateFromSpec(timeSpec);
-    // Если reminderText совпадает с timeSpec, оставляем его пустым; иначе оставляем остаток.
     let finalText = (reminderText && reminderText !== timeSpec) ? reminderText : "";
     finalText = finalText.trim();
-    // Если полученное reminderText является одним из стандартных модификаторов, очищаем его.
     const timeModifiers = ["утром", "вечером", "днем", "ночи", "полдник", "рота"];
     if (timeModifiers.includes(finalText.toLowerCase())) {
       finalText = "";
     }
-    console.log("Extracted reminder text:", finalText);
+    logger.info(`Extracted reminder text: ${finalText}`);
     const repeat = extractRepeatPattern(input);
-    console.log("Repeat:", repeat ? repeat : "нет");
+    logger.info(`Repeat: ${repeat ? repeat : "нет"}`);
     return { date, text: finalText };
   },
   extractRepeatPattern,

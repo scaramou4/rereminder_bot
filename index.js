@@ -1,6 +1,7 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const { DateTime } = require('luxon');
+const logger = require('./src/logger');
 const bot = require('./src/botInstance');
 const { parseReminderText, extractRepeatPattern } = require('./src/dateParser');
 require('./src/reminderScheduler');
@@ -57,6 +58,7 @@ function sendRemindersPage(chatId, userId) {
   if (pageReminders.length === 0) {
     bot.sendMessage(chatId, 'Нет активных напоминаний.');
     delete userState[userId];
+    logger.info(`User ${userId}: No active reminders.`);
     return;
   }
   
@@ -81,15 +83,18 @@ function sendRemindersPage(chatId, userId) {
   
   if (!state.messageId) {
     bot.sendMessage(chatId, message, { parse_mode: "HTML", reply_markup: keyboard })
-      .then(sentMessage => { state.messageId = sentMessage.message_id; })
-      .catch(err => console.error(err));
+      .then(sentMessage => {
+        state.messageId = sentMessage.message_id;
+        logger.info(`Sent reminders list to user ${userId}, message ID: ${sentMessage.message_id}`);
+      })
+      .catch(err => logger.error(`Error sending reminders list to user ${userId}: ${err.message}`));
   } else {
     bot.editMessageText(message, { chat_id: chatId, message_id: state.messageId, parse_mode: "HTML", reply_markup: keyboard })
       .catch(err => {
         if (err.response?.body?.description?.toLowerCase().includes('message is not modified')) {
           // Игнорируем
         } else {
-          console.error(err);
+          logger.error(`Error editing reminders list for user ${userId}: ${err.message}`);
         }
       });
   }
@@ -118,7 +123,7 @@ function showDeleteButtons(chatId, userId) {
   buttons.push([{ text: '❌ Отмена', callback_data: 'cancel_delete' }]);
   
   bot.editMessageReplyMarkup({ inline_keyboard: buttons }, { chat_id: chatId, message_id: state.messageId })
-    .catch(err => console.error("Ошибка при показе клавиатуры удаления:", err));
+    .catch(err => logger.error(`Error showing delete keyboard for user ${userId}: ${err.message}`));
 }
 
 bot.onText(/\/clearlist/, async (msg) => {
@@ -126,15 +131,21 @@ bot.onText(/\/clearlist/, async (msg) => {
   const userId = msg.from.id;
   clearListState[userId] = true;
   await bot.sendMessage(chatId, "Все ваши напоминания будут удалены, вы уверены? (напишите ДА)");
+  logger.info(`User ${userId} initiated clearlist.`);
 });
 
 bot.onText(/\/list/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const reminders = await Reminder.find({ userId: chatId, datetime: { $gte: new Date() } });
-  if (!reminders.length) return bot.sendMessage(chatId, 'Нет активных напоминаний.');
+  if (!reminders.length) {
+    await bot.sendMessage(chatId, 'Нет активных напоминаний.');
+    logger.info(`User ${userId} requested list but has no active reminders.`);
+    return;
+  }
   userState[userId] = { reminders, page: 0, messageId: null };
   sendRemindersPage(chatId, userId);
+  logger.info(`User ${userId} requested list; ${reminders.length} reminders loaded.`);
 });
 
 bot.on('callback_query', async (callbackQuery) => {
@@ -153,6 +164,7 @@ bot.on('callback_query', async (callbackQuery) => {
         const reminder = await Reminder.findById(reminderId);
         if (!reminder) {
           await bot.answerCallbackQuery(callbackQuery.id, { text: 'Напоминание не найдено.' });
+          logger.info(`User ${userId} tried to postpone non-existent reminder ${reminderId}.`);
           return;
         }
         if (type === '1') {
@@ -163,6 +175,7 @@ bot.on('callback_query', async (callbackQuery) => {
           const instructionMsg = await bot.sendMessage(chatId, 'Пожалуйста, введите новое время для переноса (например, "30" для 30 минут или "14:30").');
           postponeCustomState[userId] = { reminderId, instructionMessageId: instructionMsg.message_id };
           await bot.answerCallbackQuery(callbackQuery.id);
+          logger.info(`User ${userId} requested custom postponement for reminder ${reminderId}.`);
           return;
         }
         await reminder.save();
@@ -174,8 +187,9 @@ bot.on('callback_query', async (callbackQuery) => {
           if (!err.response?.body?.description?.toLowerCase().includes('message is not modified')) throw err;
         }
         await bot.answerCallbackQuery(callbackQuery.id, { text: 'Напоминание отложено.' });
+        logger.info(`User ${userId} postponed reminder ${reminderId} to ${newTime}.`);
       } catch (err) {
-        console.error(err);
+        logger.error(`Error postponing reminder for user ${userId}: ${err.message}`);
         await bot.answerCallbackQuery(callbackQuery.id, { text: 'Ошибка при обработке.' });
       }
     } else if (data.startsWith('done_')) {
@@ -184,6 +198,7 @@ bot.on('callback_query', async (callbackQuery) => {
         const reminder = await Reminder.findById(reminderId);
         if (!reminder) {
           await bot.answerCallbackQuery(callbackQuery.id, { text: 'Напоминание не найдено.' });
+          logger.info(`User ${userId} pressed Done for non-existent reminder ${reminderId}.`);
           return;
         }
         const updatedText = `✔️ ${reminder.description}`;
@@ -194,8 +209,9 @@ bot.on('callback_query', async (callbackQuery) => {
         }
         await Reminder.deleteOne({ _id: reminderId });
         await bot.answerCallbackQuery(callbackQuery.id, { text: 'Напоминание отмечено как выполненное.' });
+        logger.info(`User ${userId} marked reminder ${reminderId} as done.`);
       } catch (err) {
-        console.error(err);
+        logger.error(`Error marking reminder done for user ${userId}: ${err.message}`);
         await bot.answerCallbackQuery(callbackQuery.id, { text: 'Ошибка при обработке.' });
       }
     }
@@ -216,9 +232,9 @@ bot.on('callback_query', async (callbackQuery) => {
     } else if (data === 'delete_reminder') {
       showDeleteButtons(chatId, userId);
       await bot.answerCallbackQuery(callbackQuery.id);
+      logger.info(`User ${userId} requested deletion mode.`);
       return;
     } else if (data.startsWith('del_')) {
-      // Извлекаем глобальный номер из callback_data и вычисляем индекс (номера начинаются с 1)
       const globalNumber = parseInt(data.split('_')[1], 10);
       const globalIndex = globalNumber - 1;
       if (globalIndex < 0 || globalIndex >= userState[userId].reminders.length) {
@@ -231,8 +247,9 @@ bot.on('callback_query', async (callbackQuery) => {
         userState[userId].reminders.splice(globalIndex, 1);
         await bot.sendMessage(chatId, `✅ Напоминание "${reminder.description}" удалено.`);
         sendRemindersPage(chatId, userId);
+        logger.info(`User ${userId} deleted reminder ${reminder._id} (global number: ${globalNumber}).`);
       } catch (err) {
-        console.error(err);
+        logger.error(`Error deleting reminder for user ${userId}: ${err.message}`);
         await bot.sendMessage(chatId, 'Ошибка при удалении напоминания.');
       }
       await bot.answerCallbackQuery(callbackQuery.id);
@@ -240,6 +257,7 @@ bot.on('callback_query', async (callbackQuery) => {
     } else if (data === 'cancel_delete') {
       sendRemindersPage(chatId, userId);
       await bot.answerCallbackQuery(callbackQuery.id);
+      logger.info(`User ${userId} canceled deletion mode.`);
       return;
     }
     sendRemindersPage(chatId, userId);
@@ -269,7 +287,6 @@ bot.on('message', async (msg) => {
       if (!reminder) {
         return bot.sendMessage(chatId, 'Напоминание не найдено для отложения.');
       }
-      // Вычисляем новое время через parseReminderText (описание остается прежним)
       const { date: newDatetime } = parseReminderText(text);
       if (!newDatetime || newDatetime < new Date()) {
         return bot.sendMessage(chatId, 'Неверное или прошедшее время. Попробуйте ещё раз.');
@@ -278,24 +295,22 @@ bot.on('message', async (msg) => {
       await reminder.save();
       const newTime = formatTime(reminder.datetime);
       const updatedText = `🔔 Напоминание отложено: ${reminder.description}\nВремя: ${newTime}`;
-      // Удаляем инструкционное сообщение
       try {
         await bot.deleteMessage(chatId, instructionMessageId.toString());
       } catch (err) {
-        console.error('Ошибка при удалении инструкции:', err);
+        logger.error(`Error deleting instruction message for user ${userId}: ${err.message}`);
       }
-      // Удаляем исходное сообщение с напоминанием
       try {
         await bot.deleteMessage(chatId, reminder.lastMessageId.toString());
       } catch (err) {
-        console.error('Ошибка при удалении исходного сообщения:', err);
+        logger.error(`Error deleting original reminder message for user ${userId}: ${err.message}`);
       }
-      // Отправляем новое сообщение с обновленным временем
       const sent = await bot.sendMessage(chatId, updatedText);
       reminder.lastMessageId = sent.message_id;
       await reminder.save();
+      logger.info(`User ${userId} postponed reminder ${reminder._id} to ${newTime} (instruction and original messages deleted).`);
     } catch (err) {
-      console.error(err);
+      logger.error(`Error during custom postponement for user ${userId}: ${err.message}`);
       return bot.sendMessage(chatId, 'Ошибка при отложении напоминания.');
     }
     return;
@@ -304,6 +319,7 @@ bot.on('message', async (msg) => {
   if (/^\/clearlist$/i.test(text)) {
     clearListState[userId] = true;
     await bot.sendMessage(chatId, "Все ваши напоминания будут удалены, вы уверены? (напишите ДА)");
+    logger.info(`User ${userId} initiated clearlist.`);
     return;
   }
   
@@ -312,8 +328,10 @@ bot.on('message', async (msg) => {
       await Reminder.deleteMany({ userId: chatId });
       await bot.sendMessage(chatId, 'Все ваши напоминания удалены.');
       if (userState[userId]) delete userState[userId];
+      logger.info(`User ${userId} confirmed clearlist. All reminders deleted.`);
     } else {
       await bot.sendMessage(chatId, 'Операция очистки отменена.');
+      logger.info(`User ${userId} canceled clearlist.`);
     }
     delete clearListState[userId];
     return;
@@ -323,7 +341,9 @@ bot.on('message', async (msg) => {
   const repeatPattern = extractRepeatPattern(text);
   const nowUTC3 = DateTime.local().setZone('UTC+3').toJSDate();
   if (parsedDate < nowUTC3) {
-    return bot.sendMessage(chatId, '⏳ Событие в прошлом. Введите корректную дату и время.');
+    await bot.sendMessage(chatId, '⏳ Событие в прошлом. Введите корректную дату и время.');
+    logger.info(`User ${userId} tried to create a reminder in the past.`);
+    return;
   }
   const reminder = new Reminder({
     userId: chatId,
@@ -335,4 +355,5 @@ bot.on('message', async (msg) => {
   const formattedDate = formatDate(parsedDate);
   const repeatText = repeatPattern ? `🔁 Повтор: ${getRepeatDisplay(text)}` : '🔁 Повтор: нет';
   bot.sendMessage(chatId, `✅ Напоминание сохранено:\n\n📌 <b>${description}</b>\n🕒 ${formattedDate}\n${repeatText}`, { parse_mode: "HTML" });
+  logger.info(`User ${userId} created reminder "${description}" for ${formattedDate} with ID ${reminder._id}.`);
 });
