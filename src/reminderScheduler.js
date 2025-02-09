@@ -40,14 +40,22 @@ async function sendReminder(reminder) {
     reminder.lastMessageId = sentMessage.message_id;
     await reminder.save();
     logger.info(`Scheduler: Sent reminder ${reminder._id} to user ${chatId} with message ID ${sentMessage.message_id}.`);
+
     setTimeout(async () => {
       const existingReminder = await Reminder.findById(reminder._id);
       if (existingReminder) {
         try {
-          await bot.editMessageReplyMarkup(null, { chat_id: chatId, message_id: sentMessage.message_id });
+          // Проверяем, существует ли сообщение перед удалением клавиатуры
+          await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: sentMessage.message_id });
+          logger.info(`Scheduler: Removed inline keyboard for reminder ${reminder._id} from message ID ${sentMessage.message_id}.`);
         } catch (err) {
-          logger.error(`Scheduler: Error removing inline keyboard for reminder ${reminder._id}: ${err.message}`);
+          if (err.response?.body?.description?.toLowerCase().includes('message to edit not found')) {
+            logger.info(`Scheduler: Message ID ${sentMessage.message_id} for reminder ${reminder._id} was already deleted or modified.`);
+          } else {
+            logger.error(`Scheduler: Error removing inline keyboard for reminder ${reminder._id}: ${err.message}`);
+          }
         }
+
         const newMessage = await bot.sendMessage(chatId, messageText, { reply_markup: inlineKeyboard });
         existingReminder.lastNotified = new Date();
         existingReminder.lastMessageId = newMessage.message_id;
