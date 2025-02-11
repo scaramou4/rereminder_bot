@@ -1,19 +1,25 @@
 const TelegramBot = require('node-telegram-bot-api');
 const logger = require('./logger');
-require('dotenv').config();
 
-// Создаём бота
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+const token = process.env.TELEGRAM_BOT_TOKEN;
+if (!token) {
+  logger.error('Не задан TELEGRAM_BOT_TOKEN в .env!');
+  process.exit(1);
+}
 
-// Задаём команды бота
+const bot = new TelegramBot(token, { polling: true });
+
+// Регистрация команд бота
 bot.setMyCommands([
-  { command: '/start', description: 'Запуск бота' },
-  { command: '/list', description: 'Показать активные напоминания' },
-  { command: '/clearlist', description: 'Удалить все напоминания' }
-]).then(() => {
-    console.log("✅ Команды бота обновлены.");
-  }).catch((err) => {
-    console.error("❌ Ошибка обновления команд:", err);
+  { command: '/start', description: 'Запуск бота и получение информации' },
+  { command: '/list', description: 'Список активных уведомлений' },
+  { command: '/deleteall', description: 'Удаление всех уведомлений' }
+])
+  .then(() => {
+    logger.info('Команды бота успешно зарегистрированы');
+  })
+  .catch((error) => {
+    logger.error(`Ошибка при регистрации команд: ${error.message}`);
   });
 
 module.exports = bot;
