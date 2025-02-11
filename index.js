@@ -5,6 +5,9 @@ const { parseReminder } = require('./src/dateParser');
 const { createReminder, startScheduler, handleCallback, listReminders, deleteAllReminders } = require('./src/reminderScheduler');
 const logger = require('./src/logger');
 
+// Глобальное хранилище для отложенных (pending) напоминаний, когда текст не указан
+const pendingReminders = {};
+
 // Запуск планировщика напоминаний
 startScheduler();
 
@@ -59,25 +62,51 @@ bot.onText(/\/deleteall/, async (msg) => {
   }
 });
 
-// Обработка входящих сообщений (игнорируются команды, начинающиеся со слеша)
+// Обработка входящих сообщений
 bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+
+  // Если для данного пользователя ранее было запрошено дополнение текста напоминания,
+  // используем текущее сообщение как текст напоминания.
+  if (pendingReminders[chatId]) {
+    const pending = pendingReminders[chatId];
+    const description = msg.text;
+    delete pendingReminders[chatId];
+    const reminder = await createReminder(chatId, description, pending.datetime, pending.repeat);
+    const formattedDate = new Date(pending.datetime).toLocaleString('ru-RU', {
+      dateStyle: 'long',
+      timeStyle: 'short'
+    });
+    const confirmationText = `✅ Напоминание сохранено:
+  
+📌 ${description}
+🕒 ${formattedDate}
+🔁 Повтор: ${pending.repeat ? `каждый ${pending.repeat}` : 'нет'}`;
+    await bot.sendMessage(chatId, confirmationText);
+    return;
+  }
+
+  // Игнорируем сообщения, начинающиеся со слеша (команды)
   if (msg.text.startsWith('/')) {
     return;
   }
-  const chatId = msg.chat.id;
   const text = msg.text;
   logger.info(`Получено сообщение от user ${chatId}: "${text}"`);
-  
-  // Используем функцию parseReminder из dateParser.js
+
   const { datetime: parsedDate, reminderText: description, timeSpec, repeat } = parseReminder(text);
   logger.info(`Результат парсинга для user ${chatId}: ${JSON.stringify({ timeSpec, reminderText: description, repeat, datetime: parsedDate })}`);
-  
+
+  // Если время распознано, но текст напоминания отсутствует – запрашиваем у пользователя его ввод.
+  if (parsedDate && !description) {
+    pendingReminders[chatId] = { datetime: parsedDate, repeat };
+    await bot.sendMessage(chatId, 'Пожалуйста, введите текст напоминания:');
+    return;
+  }
   if (!description) {
     return;
   }
-  
+
   const reminder = await createReminder(chatId, description, parsedDate, repeat);
-  
   const formattedDate = new Date(parsedDate).toLocaleString('ru-RU', {
     dateStyle: 'long',
     timeStyle: 'short'
@@ -86,8 +115,7 @@ bot.on('message', async (msg) => {
   
 📌 ${description}
 🕒 ${formattedDate}
-🔁 Повтор: ${repeat ? repeat : 'нет'}`;
-  
+🔁 Повтор: ${repeat ? `каждый ${repeat}` : 'нет'}`;
   await bot.sendMessage(chatId, confirmationText);
 });
 
