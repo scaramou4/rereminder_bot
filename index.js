@@ -2,10 +2,10 @@ require('dotenv').config(); // Загрузка переменных из .env
 
 const bot = require('./src/botInstance');
 const { parseReminder } = require('./src/dateParser');
-const { createReminder, startScheduler, handleCallback, listReminders, deleteAllReminders } = require('./src/reminderScheduler');
+const { createReminder, startScheduler, handleCallback, deleteAllReminders } = require('./src/reminderScheduler');
+const listManager = require('./src/listManager'); // модуль управления списком уведомлений
 const logger = require('./src/logger');
 
-// Глобальное хранилище для отложенных (pending) напоминаний, когда текст не указан
 const pendingReminders = {};
 
 // Запуск планировщика напоминаний
@@ -26,28 +26,10 @@ bot.onText(/\/start/, (msg) => {
   bot.sendMessage(chatId, welcomeMessage);
 });
 
-// Обработка команды /list – вывод списка активных уведомлений
+// Обработка команды /list – вывод списка предстоящих уведомлений постранично
 bot.onText(/\/list/, async (msg) => {
   const chatId = msg.chat.id;
-  try {
-    const reminders = await listReminders(chatId);
-    if (!reminders || reminders.length === 0) {
-      bot.sendMessage(chatId, 'У вас нет активных уведомлений.');
-      return;
-    }
-    let messageText = 'Ваши активные уведомления:';
-    reminders.forEach((reminder, index) => {
-      const formattedTime = new Date(reminder.datetime).toLocaleString('ru-RU', {
-        dateStyle: 'long',
-        timeStyle: 'short'
-      });
-      messageText += `\n${index + 1}. ${reminder.description} — ${formattedTime}${reminder.repeat ? ' (повтор: ' + reminder.repeat + ')' : ''}`;
-    });
-    bot.sendMessage(chatId, messageText);
-  } catch (error) {
-    logger.error(`Ошибка получения списка уведомлений: ${error.message}`);
-    bot.sendMessage(chatId, 'Ошибка при получении списка уведомлений.');
-  }
+  await listManager.sendPaginatedList(chatId, 0, false);
 });
 
 // Обработка команды /deleteall – удаление всех уведомлений пользователя
@@ -62,12 +44,11 @@ bot.onText(/\/deleteall/, async (msg) => {
   }
 });
 
-// Обработка входящих сообщений
+// Обработка входящих сообщений (создание напоминаний)
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
 
-  // Если для данного пользователя ранее было запрошено дополнение текста напоминания,
-  // используем текущее сообщение как текст напоминания.
+  // Если ранее запрошен ввод текста напоминания, используем текущее сообщение
   if (pendingReminders[chatId]) {
     const pending = pendingReminders[chatId];
     const description = msg.text;
@@ -86,25 +67,22 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Игнорируем сообщения, начинающиеся со слеша (команды)
-  if (msg.text.startsWith('/')) {
-    return;
-  }
+  // Игнорируем сообщения-команды
+  if (msg.text.startsWith('/')) return;
+
   const text = msg.text;
   logger.info(`Получено сообщение от user ${chatId}: "${text}"`);
 
   const { datetime: parsedDate, reminderText: description, timeSpec, repeat } = parseReminder(text);
   logger.info(`Результат парсинга для user ${chatId}: ${JSON.stringify({ timeSpec, reminderText: description, repeat, datetime: parsedDate })}`);
 
-  // Если время распознано, но текст напоминания отсутствует – запрашиваем у пользователя его ввод.
+  // Если время распознано, но текст отсутствует – запрашиваем ввод
   if (parsedDate && !description) {
     pendingReminders[chatId] = { datetime: parsedDate, repeat };
     await bot.sendMessage(chatId, 'Пожалуйста, введите текст напоминания:');
     return;
   }
-  if (!description) {
-    return;
-  }
+  if (!description) return;
 
   const reminder = await createReminder(chatId, description, parsedDate, repeat);
   const formattedDate = new Date(parsedDate).toLocaleString('ru-RU', {
@@ -119,7 +97,11 @@ bot.on('message', async (msg) => {
   await bot.sendMessage(chatId, confirmationText);
 });
 
-// Обработка callback‑запросов (нажатий на inline‑клавиатуру)
+// Обработка callback‑запросов
 bot.on('callback_query', async (query) => {
-  await handleCallback(query);
+  if (query.data.startsWith("list_")) {
+    await listManager.handleListCallback(query);
+  } else {
+    await handleCallback(query);
+  }
 });

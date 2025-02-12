@@ -12,4 +12,10 @@ const logger = createLogger({
   ]
 });
 
+// Пример обёртки для логирования ошибок (чтобы выводилась только краткая информация):
+logger.errorShort = (errMsgOrError) => {
+  const message = (typeof errMsgOrError === 'string') ? errMsgOrError : (errMsgOrError.message || 'Неизвестная ошибка');
+  logger.error(message);
+};
+
 module.exports = logger;
