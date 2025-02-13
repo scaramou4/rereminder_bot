@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { DateTime } = require('luxon');
 const bot = require('./botInstance');
 const logger = require('./logger');
+const pendingRequests = require('./pendingRequests');
 
 // Подключение к MongoDB (без deprecated‑опций)
 mongoose
@@ -190,7 +191,16 @@ function startScheduler() {
 
 /**
  * Обработка callback‑запросов для postpone и done.
- * Функционал управления списком теперь реализован в отдельном модуле.
+ * При postpone:
+ *  - Если выбрано "1" или "3", новое время рассчитывается от текущего времени.
+ *    Исходное сообщение редактируется: текст меняется на "Отложено: <текст уведомления без времени>",
+ *    удаляются кнопки, и выводится отдельное сообщение с подтверждением:
+ *      "🔔 Повтор: <текст уведомления>"
+ *      "🕒 Новое время: <новое время>"
+ *  - Если выбрано "custom", устанавливается pendingPostpone с передачей reminderId и messageId,
+ *    и отправляется запрос на ввод времени.
+ * При done:
+ *  - Сообщение редактируется на "✅ <текст уведомления>", кнопки удаляются, и напоминание удаляется из базы.
  */
 async function handleCallback(query) {
   try {
@@ -207,17 +217,25 @@ async function handleCallback(query) {
         return;
       }
       if (postponeValue === 'custom') {
+        // Сохраняем pending запрос с reminderId и messageId
+        pendingRequests.pendingPostpone[chatId] = { reminderId, messageId };
         await bot.sendMessage(chatId, 'Введите время отсрочки (например, "30 минут"):');
         await bot.answerCallbackQuery(query.id, { text: 'Введите время отсрочки' });
+        return;
       } else {
-        let hours = parseInt(postponeValue);
-        reminder.datetime = DateTime.fromJSDate(reminder.datetime).plus({ hours }).toJSDate();
+        const hours = parseInt(postponeValue, 10);
+        const newDateTime = DateTime.local().plus({ hours }).toJSDate();
+        reminder.datetime = newDateTime;
         reminder.messageIds = [];
         await reminder.save();
-        await bot.sendMessage(
-          chatId,
-          `Напоминание отсрочено на ${hours} час(а/ов). Новое время: ${DateTime.fromJSDate(reminder.datetime).toFormat('HH:mm')}`
-        );
+        const formattedNewTime = DateTime.fromJSDate(newDateTime).toFormat('HH:mm');
+        const editedText = `Отложено: ${reminder.description}`;
+        await bot.editMessageText(editedText, { 
+          chat_id: chatId, 
+          message_id: messageId, 
+          reply_markup: { inline_keyboard: [] } 
+        });
+        await bot.sendMessage(chatId, `🔔 Повтор: ${reminder.description}\n🕒 Новое время: ${formattedNewTime}`);
         await bot.answerCallbackQuery(query.id, { text: 'Напоминание отсрочено' });
       }
     } else if (parts[0] === 'done') {
@@ -227,11 +245,13 @@ async function handleCallback(query) {
         await bot.answerCallbackQuery(query.id, { text: 'Напоминание не найдено' });
         return;
       }
-      reminder.completed = true;
-      reminder.messageIds = [];
-      await reminder.save();
-      await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
-      await bot.sendMessage(chatId, 'Напоминание выполнено и удалено.');
+      const newText = `✅ ${reminder.description}`;
+      await bot.editMessageText(newText, { 
+        chat_id: chatId, 
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [] }
+      });
+      await Reminder.findByIdAndDelete(reminderId);
       await bot.answerCallbackQuery(query.id, { text: 'Напоминание выполнено' });
     }
   } catch (error) {
@@ -243,7 +263,7 @@ module.exports = {
   createReminder,
   listReminders,
   deleteAllReminders,
-  deleteReminder, // экспортируем функцию удаления уведомления
+  deleteReminder,
   sendReminder,
   updateReminderNotifications,
   startScheduler,

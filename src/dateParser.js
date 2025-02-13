@@ -15,6 +15,9 @@
  *          (например, "во вторник норм" или "во вторник в 12 тест")
  *       4. Повторяющееся напоминание: "кажд(?:ый|ую) <период> [в <час>(:<минута>)] <текст>" 
  *          (например, "каждый день в 12 вопрос", "каждую неделю лошадь", "каждый вторник в 11 тест")
+ *       5. Относительная длительность без служебных слов: "<число> <единица>" 
+ *          (например, "30 минут", "1 час")
+ *
  *     Если время не указано в вариантах 3 и 4, по умолчанию используется 09:00.
  *     Функция возвращает объект с вычисленной датой, текстом напоминания (если не указан – null),
  *     исходной временной спецификацией и информацией о повторе.
@@ -184,7 +187,6 @@ function parseReminder(text) {
   match = normalizedText.match(dayOfWeekRegex);
   if (match) {
     const dayStr = match[1].toLowerCase();
-    // Проверяем наличие ключа либо через нормализацию
     if (dayNameToWeekday[dayStr] || dayNameToWeekday[normalizeWord(dayStr)]) {
       const hour = match[2] ? parseInt(match[2], 10) : 9;
       const minute = match[3] ? parseInt(match[3], 10) : 0;
@@ -210,7 +212,7 @@ function parseReminder(text) {
     const periodRaw = match[1].toLowerCase();
     const normPeriod = normalizeWord(periodRaw);
     const now = DateTime.local();
-    const hour = match[2] ? parseInt(match[2], 10) : 9; // если не указано, берём 9
+    const hour = match[2] ? parseInt(match[2], 10) : 9; // если не указано, берём 9:00
     const minute = match[3] ? parseInt(match[3], 10) : 0; // по умолчанию 0
     let reminderText = match[4] ? match[4].trim() : '';
     if (reminderText === '') reminderText = null;
@@ -247,6 +249,36 @@ function parseReminder(text) {
       reminderText: reminderText,
       timeSpec: `каждый ${normPeriod} в ${hour}:${minute < 10 ? '0' + minute : minute}`,
       repeat: repeat
+    };
+  }
+
+  // 5. Вариант "число единица" – относительная длительность без служебных слов (для custom postpone)
+  const durationOnlyRegex = /^(\d+)\s+([A-Za-zА-Яа-яёЁ]+)$/i;
+  match = normalizedText.match(durationOnlyRegex);
+  if (match) {
+    const number = parseInt(match[1], 10);
+    const unit = match[2].toLowerCase();
+    const unitMap = {
+      'минута': 'minutes',
+      'минуты': 'minutes',
+      'минут': 'minutes',
+      'минуту': 'minutes',
+      'час': 'hours',
+      'часа': 'hours',
+      'часов': 'hours',
+      'часу': 'hours',
+      'день': 'days',
+      'дня': 'days',
+      'дней': 'days',
+      'дню': 'days'
+    };
+    const durationKey = unitMap[unit] || 'minutes';
+    const parsedDate = DateTime.local().plus({ [durationKey]: number }).toJSDate();
+    return {
+      datetime: parsedDate,
+      reminderText: null,
+      timeSpec: `${number} ${unit}`,
+      repeat: null
     };
   }
 
