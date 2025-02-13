@@ -1,4 +1,8 @@
+const fs = require('fs');
 const { createLogger, format, transports } = require('winston');
+
+// Очищаем файл логов при запуске
+fs.writeFileSync('bot.log', '');
 
 const logger = createLogger({
   level: 'info',
@@ -11,11 +15,5 @@ const logger = createLogger({
     new transports.Console()
   ]
 });
-
-// Пример обёртки для логирования ошибок (чтобы выводилась только краткая информация):
-logger.errorShort = (errMsgOrError) => {
-  const message = (typeof errMsgOrError === 'string') ? errMsgOrError : (errMsgOrError.message || 'Неизвестная ошибка');
-  logger.error(message);
-};
 
 module.exports = logger;

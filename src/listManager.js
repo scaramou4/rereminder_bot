@@ -2,13 +2,6 @@ const bot = require('./botInstance');
 const { listReminders, deleteReminder } = require('./reminderScheduler');
 const logger = require('./logger');
 
-/**
- * Формирует текст и клавиатуру для списка уведомлений с пагинацией.
- * @param {string} chatId 
- * @param {number} page – номер страницы (0-based)
- * @param {boolean} deleteMode – если true, отображаются кнопки для удаления уведомлений.
- * @returns {object} Объект вида { text, keyboard }.
- */
 async function renderList(chatId, page, deleteMode) {
   try {
     const reminders = await listReminders(chatId);
@@ -23,24 +16,19 @@ async function renderList(chatId, page, deleteMode) {
     const startIndex = page * itemsPerPage;
     const pageReminders = reminders.slice(startIndex, startIndex + itemsPerPage);
     
-    // Форматируем каждый элемент:
-    // 1-я строка: номер. <b>Напоминание: {description}</b>
-    // 2-я строка: Дата и время: {formattedTime}
-    // 3-я строка: Повтор: {каждый ... / нет}
-    // Пустая строка
-    let text = `Ваши предстоящие уведомления (страница ${page + 1} из ${totalPages}):\n\n`;
-    
+    // Форматирование: сначала список уведомлений, затем строка с информацией о странице
+    let text = `Ваши предстоящие уведомления:\n\n`;
     pageReminders.forEach((reminder, idx) => {
       const num = startIndex + idx + 1;
       const formattedTime = new Date(reminder.datetime).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
       text += `<b>${num}. Напоминание: ${reminder.description}</b>\n`;
       text += `Дата и время: ${formattedTime}\n`;
-      text += `Повтор: ${reminder.repeat ? 'каждый ' + reminder.repeat : 'нет'}\n\n`;
+      text += `Повтор: ${reminder.repeat ? (reminder.repeat === 'день' ? 'каждый день' : (reminder.repeat === 'неделя' ? 'каждую неделю' : `каждый ${reminder.repeat}`)) : 'нет'}\n\n`;
     });
+    text += `Страница ${page + 1} из ${totalPages}`;
     
     let keyboard;
     if (!deleteMode) {
-      // Клавиатура навигации: "⏮️", "◀️", "🗑️", "▶️", "⏭️"
       keyboard = [
         [
           { text: "⏮️", callback_data: `list_first|${page}` },
@@ -51,7 +39,6 @@ async function renderList(chatId, page, deleteMode) {
         ]
       ];
     } else {
-      // Режим удаления: кнопки с номерами уведомлений текущей страницы и кнопка "Отмена"
       let rows = [];
       let currentButtons = [];
       pageReminders.forEach((reminder, idx) => {
@@ -61,9 +48,7 @@ async function renderList(chatId, page, deleteMode) {
           currentButtons = [];
         }
       });
-      if (currentButtons.length > 0) {
-        rows.push(currentButtons);
-      }
+      if (currentButtons.length > 0) rows.push(currentButtons);
       rows.push([{ text: "Отмена", callback_data: `list_cancel|${page}` }]);
       keyboard = rows;
     }
@@ -74,14 +59,6 @@ async function renderList(chatId, page, deleteMode) {
   }
 }
 
-/**
- * Отправляет или обновляет сообщение со списком уведомлений.
- * Если при обновлении сообщение не изменилось, ошибка "message is not modified" игнорируется.
- * @param {string} chatId 
- * @param {number} page 
- * @param {boolean} deleteMode 
- * @param {number|null} messageId – если указан, обновляет сообщение; иначе – отправляет новое.
- */
 async function sendPaginatedList(chatId, page, deleteMode, messageId = null) {
   try {
     const { text, keyboard } = await renderList(chatId, page, deleteMode);
@@ -103,16 +80,13 @@ async function sendPaginatedList(chatId, page, deleteMode, messageId = null) {
   }
 }
 
-/**
- * Обрабатывает callback‑запросы для управления списком уведомлений.
- */
 async function handleListCallback(query) {
   try {
     const data = query.data;
     const chatId = query.message.chat.id;
     const messageId = query.message.message_id;
     const parts = data.split("|");
-    let action = parts[0]; // Возможные значения: list_first, list_prev, list_next, list_last, list_toggle, list_cancel, list_delete
+    let action = parts[0];
     let currentPage = parts[1] ? parseInt(parts[1], 10) : 0;
     let newPage = currentPage;
     let deleteMode = false;
@@ -142,14 +116,13 @@ async function handleListCallback(query) {
       newPage = parts[2] ? parseInt(parts[2], 10) : currentPage;
       const deletedReminder = await deleteReminder(reminderId);
       if (deletedReminder) {
-        // Отправляем сообщение об удалении в чат (без модального окна)
         await bot.sendMessage(chatId, `Напоминание "${deletedReminder.description}" удалено`);
       } else {
         await bot.sendMessage(chatId, "Ошибка удаления уведомления");
       }
       deleteMode = true;
       await sendPaginatedList(chatId, newPage, deleteMode, messageId);
-      return; // предотвращаем повторный вызов answerCallbackQuery
+      return;
     }
     
     await sendPaginatedList(chatId, newPage, deleteMode, messageId);

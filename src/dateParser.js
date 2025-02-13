@@ -1,37 +1,25 @@
 /**
  * dateParser.js
  *
- * Модуль для нормализации временных выражений в тексте и последующего парсинга дат с использованием Luxon.
- * Функции модуля:
- *   - normalizeWord(word): Нормализует отдельное слово (приводит склонения единиц времени и дней недели к именительному падежу).
- *   - normalizeTimeExpressions(text): Заменяет во входном тексте все склонённые формы единиц времени и дней недели на их именительный падеж.
- *   - parseDate(text, format): Нормализует входной текст и парсит дату по указанному формату с учётом русской локали.
- *   - parseReminder(text): Парсит строку напоминания, поддерживая несколько вариантов:
- *       1. Относительное время: "через [<число>] <единица> <текст>" 
- *       2. Завтрашнее время: "завтра [в <час>(:<минута>)] <текст>" 
- *       3. Время сегодня: "в <час>(:<минута>) <текст>" 
- *       4. Определённый день недели: "в[о] <день недели> [в <час>(:<минута>)] <текст>" 
- *       5. Повторяющееся напоминание: "каждый <период> [в <час>(:<минута>)] <текст>" 
- *       6. Относительная длительность без служебных слов: "<число> <единица>"
+ * Модуль для нормализации временных выражений и парсинга напоминаний с использованием Luxon.
+ * Поддерживаются варианты:
+ *   1. "через [<число>] <единица> <текст>"
+ *      (поддерживаются десятичные числа)
+ *   2. "завтра [в <час>(:<минута>)] <текст>"
+ *   2.5. "в <час>(:<минута>) <текст>" – если не указан день
+ *   3. "в[о] <день недели> [в <час>(:<минута>)] <текст>"
+ *   4. "кажд(?:ый|ую) <период> [в <час>(:<минута>)] <текст>"
  *
- *     Если время не указано в вариантах 3 и 4, по умолчанию используется 09:00.
- *     Функция возвращает объект с вычисленной датой, текстом напоминания (если не указан – null),
- *     исходной временной спецификацией и информацией о повторе.
+ * Если время не указано, используется текущее время (текущие часы и минуты).
  */
 
 const { DateTime } = require('luxon');
 
-//
-// Вспомогательные функции и словари нормализации
-//
-
-// Таблица нормализации единиц времени для месяцев, недель и лет
 const timeUnitNormalization = {
   'месяц': ['месяц', 'месяца', 'месяцев'],
   'неделя': ['неделя', 'недели', 'недель', 'неделю'],
   'год': ['год', 'года', 'лет']
 };
-
 const timeUnitMap = {};
 Object.entries(timeUnitNormalization).forEach(([nominative, forms]) => {
   forms.forEach(form => {
@@ -39,7 +27,6 @@ Object.entries(timeUnitNormalization).forEach(([nominative, forms]) => {
   });
 });
 
-// Таблица нормализации для дней недели
 const dayOfWeekNormalization = {
   'понедельник': ['понедельник', 'понедельника', 'понедельнику', 'понедельником', 'понедельнике'],
   'вторник': ['вторник', 'вторника', 'вторнику', 'вторником', 'вторнике'],
@@ -49,7 +36,6 @@ const dayOfWeekNormalization = {
   'суббота': ['суббота', 'субботы', 'субботу', 'субботой', 'субботе'],
   'воскресенье': ['воскресенье', 'воскресенья', 'воскресенью', 'воскресеньем']
 };
-
 const dayOfWeekMap = {};
 Object.entries(dayOfWeekNormalization).forEach(([nominative, forms]) => {
   forms.forEach(form => {
@@ -57,7 +43,6 @@ Object.entries(dayOfWeekNormalization).forEach(([nominative, forms]) => {
   });
 });
 
-// Словарь для сопоставления дней недели с их числовым значением (ISO: понедельник = 1, воскресенье = 7)
 const dayNameToWeekday = {
   'понедельник': 1,
   'вторник': 2,
@@ -68,38 +53,18 @@ const dayNameToWeekday = {
   'воскресенье': 7
 };
 
-/**
- * Нормализует отдельное слово, приводя его к именительному падежу, если оно содержится в таблицах.
- * @param {string} word - слово для нормализации.
- * @returns {string} нормализованное слово или исходное, если нормализация не требуется.
- */
 function normalizeWord(word) {
   const lowerWord = word.toLowerCase();
-  if (timeUnitMap[lowerWord]) {
-    return timeUnitMap[lowerWord];
-  }
-  if (dayOfWeekMap[lowerWord]) {
-    return dayOfWeekMap[lowerWord];
-  }
+  if (timeUnitMap[lowerWord]) return timeUnitMap[lowerWord];
+  if (dayOfWeekMap[lowerWord]) return dayOfWeekMap[lowerWord];
   return word;
 }
 
-/**
- * Нормализует временные выражения в тексте, заменяя найденные склонённые формы единиц времени и дней недели
- * на их именительный падеж.
- * @param {string} text - исходный текст.
- * @returns {string} текст с нормализованными временными выражениями.
- */
 function normalizeTimeExpressions(text) {
-  return text.replace(new RegExp(`\\b(${Object.keys(timeUnitMap).concat(Object.keys(dayOfWeekMap)).join('|')})\\b`, 'gi'), (match) => normalizeWord(match));
+  const regex = new RegExp(`\\b(${Object.keys(timeUnitMap).concat(Object.keys(dayOfWeekMap)).join('|')})\\b`, 'gi');
+  return text.replace(regex, (match) => normalizeWord(match));
 }
 
-/**
- * Парсит дату из текста с использованием Luxon.
- * @param {string} text - исходный текст.
- * @param {string} format - формат для парсинга.
- * @returns {DateTime} объект Luxon DateTime.
- */
 function parseDate(text, format) {
   const normalizedText = normalizeTimeExpressions(text);
   return DateTime.fromFormat(normalizedText, format, { locale: 'ru' });
@@ -107,21 +72,16 @@ function parseDate(text, format) {
 
 /**
  * Парсит строку напоминания.
- * @param {string} text - исходный текст напоминания.
- * @returns {object} объект с полями:
- *   - datetime: рассчитанная дата (Date),
- *   - reminderText: текст напоминания (если отсутствует – null),
- *   - timeSpec: исходная временная спецификация,
- *   - repeat: информация о повторе (например, "день", "неделя", "месяц", "год", или название дня недели), либо null.
  */
 function parseReminder(text) {
   const normalizedText = normalizeTimeExpressions(text);
+  const now = DateTime.local();
 
-  // 1. Вариант "через [<число>] <единица> <текст>"
-  const throughRegex = /^через\s+(?:(\d+)\s+)?([A-Za-zА-Яа-яёЁ]+)\s+(.+)/i;
+  // 1. "через [<число>] <единица> <текст>"
+  const throughRegex = /^через\s+(?:(\d+(?:\.\d+)?)\s+)?([A-Za-zА-Яа-яёЁ]+)\s+(.+)/i;
   let match = normalizedText.match(throughRegex);
   if (match) {
-    const number = match[1] ? parseInt(match[1], 10) : 1;
+    const number = match[1] ? parseFloat(match[1]) : 1;
     const unit = match[2].toLowerCase();
     const reminderText = match[3].trim();
     const unitMap = {
@@ -136,24 +96,13 @@ function parseReminder(text) {
       'день': 'days',
       'дня': 'days',
       'дней': 'days',
-      'дню': 'days',
-      'неделя': 'weeks',
-      'недели': 'weeks',
-      'недель': 'weeks',
-      'месяц': 'months',
-      'месяца': 'months',
-      'месяцев': 'months',
-      'год': 'years',
-      'года': 'years',
-      'лет': 'years'
+      'дню': 'days'
     };
     const durationKey = unitMap[unit] || 'minutes';
     const parsedDate = DateTime.local().plus({ [durationKey]: number }).toJSDate();
     let repeat = null;
     const repeatMatch = normalizedText.match(/каждый\s+(\w+)/i);
-    if (repeatMatch) {
-      repeat = repeatMatch[1].toLowerCase();
-    }
+    if (repeatMatch) repeat = repeatMatch[1].toLowerCase();
     return {
       datetime: parsedDate,
       reminderText: reminderText,
@@ -162,14 +111,14 @@ function parseReminder(text) {
     };
   }
 
-  // 2. Вариант "завтра [в <час>(:<минута>)] <текст>"
+  // 2. "завтра [в <час>(:<минута>)] <текст>"
   const tomorrowRegex = /^завтра(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/i;
   match = normalizedText.match(tomorrowRegex);
   if (match) {
-    const hour = match[1] ? parseInt(match[1], 10) : 9;
-    const minute = match[2] ? parseInt(match[2], 10) : 0;
+    const hour = match[1] ? parseInt(match[1], 10) : now.hour;
+    const minute = match[2] ? parseInt(match[2], 10) : now.minute;
     const reminderText = match[3].trim();
-    const dt = DateTime.local().plus({ days: 1 }).set({ hour, minute, second: 0, millisecond: 0 });
+    const dt = now.plus({ days: 1 }).set({ hour, minute, second: 0, millisecond: 0 });
     return {
       datetime: dt.toJSDate(),
       reminderText: reminderText,
@@ -177,19 +126,16 @@ function parseReminder(text) {
       repeat: null
     };
   }
-
-  // 3. Новый вариант "в <час>(:<минута>) <текст>" – для указания времени сегодня
-  const todayTimeRegex = /^в\s+(\d{1,2})(?::(\d{1,2}))?\s+(.+)/i;
-  match = normalizedText.match(todayTimeRegex);
+  
+  // 2.5. "в <час>(:<минута>) <текст>" – если не указан день недели
+  const timeOnlyRegex = /^в\s+(\d{1,2})(?::(\d{1,2}))?\s+(.+)/i;
+  match = normalizedText.match(timeOnlyRegex);
   if (match) {
     const hour = parseInt(match[1], 10);
     const minute = match[2] ? parseInt(match[2], 10) : 0;
     const reminderText = match[3].trim();
-    const now = DateTime.local();
     let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
-    if (dt <= now) {
-      dt = dt.plus({ days: 1 });
-    }
+    if (dt <= now) dt = dt.plus({ days: 1 });
     return {
       datetime: dt.toJSDate(),
       reminderText: reminderText,
@@ -198,16 +144,15 @@ function parseReminder(text) {
     };
   }
 
-  // 4. Вариант "в[о] <день недели> [в <час>(:<минута>)] <текст>"
+  // 3. "в[о] <день недели> [в <час>(:<минута>)] <текст>"
   const dayOfWeekRegex = /^в(?:о)?\s+([A-Za-zА-Яа-яёЁ]+)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/i;
   match = normalizedText.match(dayOfWeekRegex);
   if (match) {
     const dayStr = match[1].toLowerCase();
     if (dayNameToWeekday[dayStr] || dayNameToWeekday[normalizeWord(dayStr)]) {
-      const hour = match[2] ? parseInt(match[2], 10) : 9;
-      const minute = match[3] ? parseInt(match[3], 10) : 0;
+      const hour = match[2] ? parseInt(match[2], 10) : now.hour;
+      const minute = match[2] ? (match[3] ? parseInt(match[3], 10) : 0) : now.minute;
       const reminderText = match[4].trim();
-      const now = DateTime.local();
       const normDay = dayNameToWeekday[dayStr] ? dayStr : normalizeWord(dayStr);
       let diff = (dayNameToWeekday[normDay] - now.weekday + 7) % 7;
       if (diff === 0) diff = 7;
@@ -220,16 +165,15 @@ function parseReminder(text) {
       };
     }
   }
-
-  // 5. Вариант "кажд(?:ый|ую) <период> [в <час>(:<минута>)] <текст>" – повторяющееся напоминание
+  
+  // 4. "кажд(?:ый|ую) <период> [в <час>(:<минута>)] <текст>"
   const everyRegex = /^кажд(?:ый|ую)\s+([A-Za-zА-Яа-яёЁ]+)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s*(.*)/i;
   match = normalizedText.match(everyRegex);
   if (match) {
     const periodRaw = match[1].toLowerCase();
     const normPeriod = normalizeWord(periodRaw);
-    const now = DateTime.local();
-    const hour = match[2] ? parseInt(match[2], 10) : 9; // если не указано, берём 9:00
-    const minute = match[3] ? parseInt(match[3], 10) : 0; // по умолчанию 0
+    const hour = match[2] ? parseInt(match[2], 10) : now.hour;
+    const minute = match[2] ? (match[3] ? parseInt(match[3], 10) : 0) : now.minute;
     let reminderText = match[4] ? match[4].trim() : '';
     if (reminderText === '') reminderText = null;
     let dt;
@@ -267,13 +211,13 @@ function parseReminder(text) {
       repeat: repeat
     };
   }
-
-  // 6. Вариант "число единица" – относительная длительность без служебных слов (для custom postpone)
-  const durationOnlyRegex = /^(\d+)\s+([A-Za-zА-Яа-яёЁ]+)$/i;
+  
+  // 5. Вариант "число единица" – относительная длительность (для custom postpone)
+  const durationOnlyRegex = /^(\d+(?:\.\d+)?)\s+([A-Za-zА-Яа-яёЁ]+)$/i;
   match = normalizedText.match(durationOnlyRegex);
   if (match) {
-    const number = parseInt(match[1], 10);
-    const unit = match[2].toLowerCase();
+    const number = parseFloat(match[1]);
+    const unitRaw = match[2].toLowerCase();
     const unitMap = {
       'минута': 'minutes',
       'минуты': 'minutes',
@@ -288,16 +232,17 @@ function parseReminder(text) {
       'дней': 'days',
       'дню': 'days'
     };
-    const durationKey = unitMap[unit] || 'minutes';
-    const parsedDate = DateTime.local().plus({ [durationKey]: number }).toJSDate();
+    const unit = unitMap[unitRaw] || null;
+    if (!unit) return { datetime: null };
+    const parsedDate = DateTime.local().plus({ [unit]: number }).toJSDate();
     return {
       datetime: parsedDate,
       reminderText: null,
-      timeSpec: `${number} ${unit}`,
+      timeSpec: `${number} ${unitRaw}`,
       repeat: null
     };
   }
-
+  
   return { datetime: null, reminderText: null, timeSpec: null, repeat: null };
 }
 

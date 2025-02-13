@@ -9,7 +9,6 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: true });
 
-// Регистрация команд бота
 bot.setMyCommands([
   { command: '/start', description: 'Запуск бота и получение информации' },
   { command: '/list', description: 'Список активных уведомлений' },
