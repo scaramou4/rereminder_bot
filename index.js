@@ -50,7 +50,9 @@ bot.on('message', async (msg) => {
     const description = msg.text;
     delete pendingRequests.pendingReminders[chatId];
     const reminder = await createReminder(chatId, description, pending.datetime, pending.repeat);
-    const formattedDate = new Date(pending.datetime).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
+    // Для повторяющихся уведомлений показываем время следующего события
+    const eventDate = pending.repeat ? reminder.nextReminder : pending.datetime;
+    const formattedDate = new Date(eventDate).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
     const confirmationText = `✅ Напоминание сохранено:
   
 📌 ${description}
@@ -79,9 +81,9 @@ bot.on('message', async (msg) => {
     reminder.messageIds = [];
     await reminder.save();
     const formattedNewTime = DateTime.fromJSDate(newDateTime).toFormat('HH:mm');
-    // Сначала редактируем исходное сообщение: меняем текст на "🔔 Отложено: ..."
+    // Редактируем исходное сообщение (удаляем кнопки и меняем текст на "Отложено: ...")
     await bot.editMessageText(`🔔 Отложено: ${reminder.description}`, { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] }, parse_mode: "HTML" });
-    // Затем отправляем новое уведомление с информацией о новом времени
+    // Отправляем новое уведомление
     await bot.sendMessage(chatId, `🔔 Повторно: ${reminder.description}\n🕒 Новое время: ${formattedNewTime}`, { parse_mode: "HTML" });
     return;
   }
@@ -107,7 +109,9 @@ bot.on('message', async (msg) => {
   if (!description) return;
   
   const reminder = await createReminder(chatId, description, parsedDate, repeat);
-  const formattedDate = new Date(parsedDate).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
+  // Для повторяющихся уведомлений выводим время следующего повторения, а для одноразовых – время parsedDate
+  const eventDate = repeat ? reminder.nextReminder : parsedDate;
+  const formattedDate = new Date(eventDate).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
   const confirmationText = `✅ Напоминание сохранено:
   
 📌 ${description}

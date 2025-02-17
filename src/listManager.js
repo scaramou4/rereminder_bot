@@ -1,6 +1,7 @@
 const bot = require('./botInstance');
 const { listReminders, deleteReminder } = require('./reminderScheduler');
 const logger = require('./logger');
+const { DateTime } = require('luxon');
 
 async function renderList(chatId, page, deleteMode) {
   try {
@@ -16,14 +17,17 @@ async function renderList(chatId, page, deleteMode) {
     const startIndex = page * itemsPerPage;
     const pageReminders = reminders.slice(startIndex, startIndex + itemsPerPage);
     
-    // Форматирование: сначала список уведомлений, затем строка с информацией о странице
     let text = `Ваши предстоящие уведомления:\n\n`;
     pageReminders.forEach((reminder, idx) => {
       const num = startIndex + idx + 1;
-      const formattedTime = new Date(reminder.datetime).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+      // Форматирование nextEvent: "HH:mm, d MMMM yyyy"
+      const formattedTime = DateTime.fromJSDate(reminder.nextEvent)
+        .setZone('Europe/Moscow')
+        .setLocale('ru')
+        .toFormat("HH:mm, d MMMM yyyy");
       text += `<b>${num}. Напоминание: ${reminder.description}</b>\n`;
-      text += `Дата и время: ${formattedTime}\n`;
-      text += `Повтор: ${reminder.repeat ? (reminder.repeat === 'день' ? 'каждый день' : (reminder.repeat === 'неделя' ? 'каждую неделю' : `каждый ${reminder.repeat}`)) : 'нет'}\n\n`;
+      text += `Следующее событие: ${formattedTime}\n`;
+      text += `Повтор: ${reminder.repeat ? (reminder.repeat === 'неделя' ? 'каждую неделю' : `каждый ${reminder.repeat}`) : 'нет'}\n\n`;
     });
     text += `Страница ${page + 1} из ${totalPages}`;
     
@@ -39,16 +43,18 @@ async function renderList(chatId, page, deleteMode) {
         ]
       ];
     } else {
+      // В режиме удаления для каждого уведомления создаем кнопку с его номером
       let rows = [];
-      let currentButtons = [];
+      let row = [];
       pageReminders.forEach((reminder, idx) => {
-        currentButtons.push({ text: `${startIndex + idx + 1}`, callback_data: `list_delete|${reminder._id}|${page}` });
-        if ((idx + 1) % 5 === 0) {
-          rows.push(currentButtons);
-          currentButtons = [];
-        }
+         row.push({ text: `${startIndex + idx + 1}`, callback_data: `list_delete|${reminder._id}|${page}` });
+         if (row.length === 5) {
+           rows.push(row);
+           row = [];
+         }
       });
-      if (currentButtons.length > 0) rows.push(currentButtons);
+      if (row.length > 0) rows.push(row);
+      // Добавляем кнопку "Отмена" для выхода из режима удаления
       rows.push([{ text: "Отмена", callback_data: `list_cancel|${page}` }]);
       keyboard = rows;
     }
@@ -112,6 +118,7 @@ async function handleListCallback(query) {
       deleteMode = false;
       newPage = currentPage;
     } else if (action === "list_delete") {
+      // Реализуем удаление уведомления
       const reminderId = parts[1];
       newPage = parts[2] ? parseInt(parts[2], 10) : currentPage;
       const deletedReminder = await deleteReminder(reminderId);
@@ -120,9 +127,7 @@ async function handleListCallback(query) {
       } else {
         await bot.sendMessage(chatId, "Ошибка удаления уведомления");
       }
-      deleteMode = true;
-      await sendPaginatedList(chatId, newPage, deleteMode, messageId);
-      return;
+      deleteMode = false; // После удаления переходим в обычный режим
     }
     
     await sendPaginatedList(chatId, newPage, deleteMode, messageId);
