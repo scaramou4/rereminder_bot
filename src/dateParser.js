@@ -4,13 +4,16 @@
  * Модуль для нормализации временных выражений и парсинга дат с использованием Luxon.
  * Поддерживаются варианты:
  *   1. "кажд(?:ый|ую|дые) [<число>] <период> [в <час>(:<минут>)] <текст>" – повторяющееся уведомление.
- *      Примеры: "каждую минуту тест", "каждую 1 минуту тест", "каждую 2 минуты тест"
+ *      Примеры: "каждую минуту тест", "каждую 1 минуту тест", "каждый час тест часа 1629", "каждую пятницу тест"
  *   2. "через [<число>] <единица> <текст>" – разовое уведомление.
  *   3. "завтра [в <час>(:<минут>)] <текст>"
  *   4. "послезавтра [в <час>(:<минут>)] <текст>"
- *   5. "в <час> [час(ов)] [<минут> минут] <текст>" и числовой формат ("в 1015" или "в 10 15 тест")
+ *   5. "в <час> [час(ов)] [<минут> минут] <текст>", а также числовой формат без разделителя (например, "в1015 тест", "в 10:15 тест" или "в 10 15 тест")
  *
- * Если время не указано для повторяющихся уведомлений, вычисляется время первого срабатывания как текущее время (в московской зоне).
+ * Если время не указано для повторяющихся уведомлений, вычисляется время первого срабатывания.
+ * Для единиц повторения, представляющих дни недели (например, "пятница", "воскресенье", "понедельник"), если время не указано,
+ * выбирается ближайшая дата с этим днём недели (с сохранением текущих часов и минут). Для таких уведомлений nextReminder вычисляется как datetime плюс 7 дней.
+ * Все вычисления проводятся с учетом московской зоны.
  */
 
 const { DateTime } = require('luxon');
@@ -76,11 +79,15 @@ function parseDate(text, format) {
 
 /**
  * Вычисляет следующее время повторения, учитывая множитель (если задан) и единицу.
- * Например, для "минуту" или "2 минуты" прибавляет 1 или 2 минуты соответственно.
+ * Если repeat – это день недели (например, "пятница" или "воскресенье"), то прибавляется 7 дней.
  * Все вычисления проводятся в часовом поясе "Europe/Moscow".
  */
 function computeNextTimeFromScheduled(scheduledTime, repeat) {
   const dt = DateTime.fromJSDate(scheduledTime, { zone: MOSCOW_ZONE });
+  // Если repeat соответствует дню недели (в именительном падеже)
+  if (repeat in dayNameToWeekday) {
+    return dt.plus({ weeks: 1 }).toJSDate();
+  }
   const match = repeat.match(/^(\d+)?\s*(минут(?:а|ы|у)|час(?:а|ов|у)?|день(?:я|ей)?|недел(?:я|и|ю)?|месяц(?:а|ев)?|год(?:а|ов)?)$/i);
   let multiplier = 1;
   let unit = repeat;
@@ -121,13 +128,34 @@ function parseReminder(text) {
   let match = normalizedText.match(repeatRegex);
   if (match) {
     const multiplier = match[1] ? parseInt(match[1], 10) : 1;
-    const periodUnit = match[2].toLowerCase();
+    // Нормализуем единицу повторения (например, "пятницу" -> "пятница", "воскресенье" -> "воскресенье")
+    let periodUnit = normalizeWord(match[2]);
     const reminderText = match[5].trim();
     const repeatValue = multiplier === 1 ? periodUnit : `${multiplier} ${periodUnit}`;
     let dt;
     if (!match[3]) {
-      // Если время не указано, первое событие происходит в текущий момент
-      dt = now;
+      // Если время не указано.
+      // Если periodUnit соответствует дню недели, вычисляем ближайшую дату этого дня, сохраняя текущие часы и минуты.
+      if (periodUnit in dayNameToWeekday) {
+        const targetWeekday = dayNameToWeekday[periodUnit];
+        // Сохраним текущие часы и минуты
+        const currentHour = now.hour;
+        const currentMinute = now.minute;
+        dt = now.set({ hour: currentHour, minute: currentMinute, second: 0, millisecond: 0 });
+        // Если сегодня нужный день, но время уже прошло, или если сегодня не нужный день – найти ближайший нужный день
+        if (now.weekday === targetWeekday) {
+          if (dt <= now) {
+            dt = dt.plus({ weeks: 1 });
+          }
+        } else {
+          // Вычисляем разницу между целевым днем и сегодняшним
+          let diff = targetWeekday - now.weekday;
+          if (diff <= 0) diff += 7;
+          dt = dt.plus({ days: diff });
+        }
+      } else {
+        dt = now;
+      }
       const formattedTime = dt.toFormat('HH:mm');
       return {
         datetime: dt.toJSDate(),
@@ -197,7 +225,7 @@ function parseReminder(text) {
   match = normalizedText.match(tomorrowRegex);
   if (match) {
     const hour = match[1] ? parseInt(match[1], 10) : now.hour;
-    const minute = match[2] ? parseInt(match[2], 10) : 0;
+    const minute = match[2] ? parseInt(match[2], 10) : now.minute;
     const reminderText = match[3].trim();
     const dt = now.plus({ days: 1 }).set({ hour, minute, second: 0, millisecond: 0 });
     return {
@@ -213,7 +241,7 @@ function parseReminder(text) {
   match = normalizedText.match(dayAfterTomorrowRegex);
   if (match) {
     const hour = match[1] ? parseInt(match[1], 10) : now.hour;
-    const minute = match[2] ? parseInt(match[2], 10) : 0;
+    const minute = match[2] ? parseInt(match[2], 10) : now.minute;
     const reminderText = match[3].trim();
     const dt = now.plus({ days: 2 }).set({ hour, minute, second: 0, millisecond: 0 });
     return {
@@ -224,21 +252,72 @@ function parseReminder(text) {
     };
   }
   
-  // 5. Обработка формата "в <час> [час(ов)] [<минут> минут] <текст>" и числовой формат ("в 1015" или "в 10 15 тест")
+  // 5. Обработка форматов для времени, начинающихся с "в"
+  // 5.1 Сначала пытаемся найти время с разделителем, например, "в 10:15 тест" или "в 10.15 тест"
+  const timeWithSeparatorRegex = /^в\s*(\d{1,2})\s*[:.,;\/]\s*(\d{1,2})\s+(.+)/i;
+  match = normalizedText.match(timeWithSeparatorRegex);
+  if (match) {
+    const hour = parseInt(match[1], 10);
+    const minute = parseInt(match[2], 10);
+    const reminderText = match[3].trim();
+    let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
+    if (dt <= now) dt = dt.plus({ days: 1 });
+    return {
+      datetime: dt.toJSDate(),
+      reminderText: reminderText,
+      timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
+      repeat: null
+    };
+  }
+  
+  // 5.2 Затем пытаемся распознать числовой формат без разделителя, например, "в1015 тест"
+  const timeNumericRegex = /^в\s*(\d{3,4})\s+(.+)/i;
+  match = normalizedText.match(timeNumericRegex);
+  if (match) {
+    const timeNum = match[1];
+    let hour, minute;
+    if (timeNum.length === 3) {
+      hour = parseInt(timeNum.slice(0, 1), 10);
+      minute = parseInt(timeNum.slice(1), 10);
+    } else { // длина 4
+      hour = parseInt(timeNum.slice(0, 2), 10);
+      minute = parseInt(timeNum.slice(2), 10);
+    }
+    const reminderText = match[2].trim();
+    let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
+    if (dt <= now) dt = dt.plus({ days: 1 });
+    return {
+      datetime: dt.toJSDate(),
+      reminderText: reminderText,
+      timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
+      repeat: null
+    };
+  }
+  
+  // 5.3 Новый вариант для формата "в HH MM <текст>" (два числа, разделённые пробелом)
+  const timeSeparatedRegex = /^в\s+(\d{1,2})\s+(\d{1,2})\s+(.+)/i;
+  match = normalizedText.match(timeSeparatedRegex);
+  if (match) {
+    const hour = parseInt(match[1], 10);
+    const minute = parseInt(match[2], 10);
+    const reminderText = match[3].trim();
+    let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
+    if (dt <= now) dt = dt.plus({ days: 1 });
+    return {
+      datetime: dt.toJSDate(),
+      reminderText: reminderText,
+      timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
+      repeat: null
+    };
+  }
+  
+  // 5.4 Фолбэк вариант для формата "в <час> [час(ов)] [<минут> минут] <текст>"
   const timeOnlyRegex = /^в\s+(\d{1,2})(?:(?:\s*(?:час(?:ов|а)?))\s*(\d{1,2})\s*(?:минут(?:ы|))?)?\s+(.+)/i;
   match = normalizedText.match(timeOnlyRegex);
   if (match) {
     const hour = parseInt(match[1], 10);
     const minute = match[2] ? parseInt(match[2], 10) : 0;
     const reminderText = match[3].trim();
-    if (!reminderText) {
-      return {
-        datetime: now.set({ hour, minute, second: 0, millisecond: 0 }).toJSDate(),
-        reminderText: null,
-        timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
-        repeat: null
-      };
-    }
     let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
     if (dt <= now) dt = dt.plus({ days: 1 });
     return {

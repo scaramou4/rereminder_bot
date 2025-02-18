@@ -11,6 +11,39 @@ const { DateTime } = require('luxon');
 
 startScheduler();
 
+function formatRepeatPhrase(repeat) {
+  if (!repeat) return 'нет';
+  
+  // Мапа для женского рода: именительный → винительный
+  const feminineAccusativeMap = {
+    'минута': 'минуту',
+    'неделя': 'неделю',
+    'среда': 'среду',
+    'пятница': 'пятницу',
+    'суббота': 'субботу'
+  };
+  
+  // Нейтральные существительные
+  const neutral = ['воскресенье'];
+
+  const parts = repeat.split(' ');
+  
+  if (parts.length === 1) {
+    let unit = parts[0];
+    if (feminineAccusativeMap[unit]) {
+      return `каждую ${feminineAccusativeMap[unit]}`;
+    } else if (neutral.includes(unit)) {
+      return `каждое ${unit}`;
+    } else {
+      return `каждый ${unit}`;
+    }
+  } else {
+    const multiplier = parts[0];
+    const unit = parts.slice(1).join(' ');
+    return `каждые ${multiplier} ${unit}`;
+  }
+}
+
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const welcomeMessage = `Привет! Я бот-напоминалка.
@@ -50,14 +83,14 @@ bot.on('message', async (msg) => {
     const description = msg.text;
     delete pendingRequests.pendingReminders[chatId];
     const reminder = await createReminder(chatId, description, pending.datetime, pending.repeat);
-    // Для повторяющихся уведомлений показываем время следующего события
-    const eventDate = pending.repeat ? reminder.nextReminder : pending.datetime;
+    // Для повторяющихся уведомлений выводим ближайшее событие: если есть nextReminder, то оно, иначе datetime
+    const eventDate = pending.repeat ? (reminder.nextReminder || reminder.datetime) : pending.datetime;
     const formattedDate = new Date(eventDate).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
     const confirmationText = `✅ Напоминание сохранено:
   
 📌 ${description}
 🕒 ${formattedDate}
-🔁 Повтор: ${pending.repeat ? (pending.repeat === 'неделя' ? 'каждую неделю' : `каждый ${pending.repeat}`) : 'нет'}`;
+🔁 Повтор: ${formatRepeatPhrase(pending.repeat)}`;
     await bot.sendMessage(chatId, confirmationText);
     return;
   }
@@ -81,20 +114,21 @@ bot.on('message', async (msg) => {
     reminder.messageIds = [];
     await reminder.save();
     const formattedNewTime = DateTime.fromJSDate(newDateTime).toFormat('HH:mm');
-    // Редактируем исходное сообщение (удаляем кнопки и меняем текст на "Отложено: ...")
     await bot.editMessageText(`🔔 Отложено: ${reminder.description}`, { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] }, parse_mode: "HTML" });
-    // Отправляем новое уведомление
     await bot.sendMessage(chatId, `🔔 Повторно: ${reminder.description}\n🕒 Новое время: ${formattedNewTime}`, { parse_mode: "HTML" });
     return;
   }
   
   if (msg.text.startsWith('/')) return;
   
-  const text = msg.text;
-  logger.info(`Получено сообщение от user ${chatId}: "${text}"`);
-  
-  const { datetime: parsedDate, reminderText: description, timeSpec, repeat } = parseReminder(text);
-  logger.info(`Результат парсинга для user ${chatId}: ${JSON.stringify({ timeSpec, reminderText: description, repeat, datetime: parsedDate })}`);
+  const textNormalizedYo = msg.text
+    .replace(/ё/g, 'е')
+    .replace(/Ё/g, 'Е');
+
+  logger.info(`Получено сообщение от user ${chatId}: "${textNormalizedYo}"`);
+
+  const { datetime: parsedDate, reminderText: description, timeSpec, repeat } = parseReminder(textNormalizedYo);
+  logger.info(`Результат парсинга: ${JSON.stringify({ timeSpec, reminderText: description, repeat, datetime: parsedDate })}`);
   
   if (!parsedDate) {
     await bot.sendMessage(chatId, "Сорри, не смог распознать. Давайте еще раз. Напишите понятно: 'завтра в 10 купи молоко'.");
@@ -109,14 +143,14 @@ bot.on('message', async (msg) => {
   if (!description) return;
   
   const reminder = await createReminder(chatId, description, parsedDate, repeat);
-  // Для повторяющихся уведомлений выводим время следующего повторения, а для одноразовых – время parsedDate
-  const eventDate = repeat ? reminder.nextReminder : parsedDate;
+  // Для повторяющихся уведомлений выводим время следующего события (nextReminder, если оно установлено, иначе datetime)
+  const eventDate = repeat ? (reminder.nextReminder || reminder.datetime) : parsedDate;
   const formattedDate = new Date(eventDate).toLocaleString('ru-RU', { dateStyle: 'long', timeStyle: 'short' });
   const confirmationText = `✅ Напоминание сохранено:
   
 📌 ${description}
 🕒 ${formattedDate}
-🔁 Повтор: ${repeat ? (repeat === 'неделя' ? 'каждую неделю' : `каждый ${repeat}`) : 'нет'}`;
+🔁 Повтор: ${formatRepeatPhrase(repeat)}`;
   await bot.sendMessage(chatId, confirmationText);
 });
 

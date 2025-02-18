@@ -23,11 +23,8 @@ const reminderSchema = new mongoose.Schema({
   repeat: { type: String, default: null },
   nextReminder: { type: Date, default: null },
   lastNotified: { type: Date, default: null },
-  // Для повторяющихся уведомлений – массив циклов (для каждого отправленного планового уведомления)
   cycles: { type: [cycleSchema], default: [] },
-  // Для одноразовых уведомлений – сохраняем id последнего отправленного сообщения
   messageId: { type: Number, default: null },
-  // Универсальное поле postponedReminder (для одноразовых уведомлений)
   postponedReminder: { type: Date, default: null },
   completed: { type: Boolean, default: false }
 });
@@ -124,7 +121,7 @@ async function deleteReminder(reminderId) {
 }
 
 /* ===============================
-   Универсальная логика postponedReminder (с использованием временной зоны)
+   Универсальная логика postponedReminder (с учетом московской зоны)
    =============================== */
 
 /**
@@ -140,7 +137,9 @@ function toMoscow(dt) {
  * Если передан объект cycle – повторяющееся уведомление, иначе – одноразовое.
  */
 async function processPostponed(reminder, options = {}) {
-  const displayTime = toMoscow(options.cycle ? options.cycle.plannedTime : reminder.datetime).toFormat('HH:mm');
+  const displayTime = options.cycle 
+    ? toMoscow(options.cycle.plannedTime).toFormat('HH:mm')
+    : toMoscow(reminder.datetime).toFormat('HH:mm');
   const editText = `Отложено: ${reminder.description}\n🕒 ${displayTime}`;
   try {
     if (options.cycle) {
@@ -206,7 +205,26 @@ async function processPostponed(reminder, options = {}) {
 
 /**
  * Отправляет плановое уведомление для повторяющегося напоминания.
- * Добавляет новый объект цикла в массив cycles.
+ * Теперь мы всегда используем reminder.nextReminder (если оно существует) как время текущего цикла.
+ * После отправки нового планового уведомления обновляем reminder: устанавливаем reminder.datetime равным времени текущего цикла,
+ * рассчитываем новое nextReminder, обновляем lastNotified и оставляем только последний цикл.
+ */
+async function processPlannedRepeat(reminder) {
+  // Всегда используем nextReminder для определения текущего цикла
+  const currentCycleTime = toMoscow(reminder.nextReminder);
+  await sendPlannedReminderRepeated(reminder, currentCycleTime.toJSDate());
+  const nextOccurrence = computeNextTimeFromScheduled(currentCycleTime.toJSDate(), reminder.repeat);
+  reminder.datetime = currentCycleTime.toJSDate();
+  reminder.nextReminder = nextOccurrence;
+  reminder.lastNotified = new Date();
+  if (reminder.cycles && reminder.cycles.length > 0) {
+    reminder.cycles = [reminder.cycles[reminder.cycles.length - 1]];
+  }
+  await reminder.save();
+}
+
+/**
+ * Отправляет плановое уведомление для повторяющегося уведомления.
  */
 async function sendPlannedReminderRepeated(reminder, displayTimeOverride) {
   const displayTime = toMoscow(displayTimeOverride).toFormat('HH:mm');
@@ -231,7 +249,7 @@ async function sendPlannedReminderRepeated(reminder, displayTimeOverride) {
   const sentMessage = await bot.sendMessage(reminder.userId, messageText, inlineKeyboard);
   const plannedTime = toMoscow(displayTimeOverride);
   const cycle = {
-    plannedTime: displayTimeOverride,
+    plannedTime: plannedTime.toJSDate(),
     postponedReminder: plannedTime.plus({ minutes: 3 }).toJSDate(),
     messageId: sentMessage.message_id
   };
@@ -242,34 +260,17 @@ async function sendPlannedReminderRepeated(reminder, displayTimeOverride) {
 }
 
 /**
- * Обрабатывает все циклы отложенных повторов для повторяющегося уведомления.
+ * Обрабатывает только последний цикл отложенных повторов для повторяющегося уведомления.
  */
 async function processPostponedCycles(reminder) {
-  const now = DateTime.local().setZone('Europe/Moscow');
-  for (let cycle of reminder.cycles) {
-    const postponedTime = toMoscow(cycle.postponedReminder);
+  if (reminder.cycles && reminder.cycles.length > 0) {
+    const cycle = reminder.cycles[reminder.cycles.length - 1];
+    const postponedTime = DateTime.fromJSDate(cycle.postponedReminder, { zone: 'Europe/Moscow' });
+    const now = DateTime.local().setZone('Europe/Moscow');
     if (now >= postponedTime) {
       await processPostponed(reminder, { cycle });
     }
   }
-}
-
-/**
- * Плановая отправка для повторяющегося уведомления:
- * Если текущее время >= reminder.nextReminder, отправляется новое плановое уведомление.
- */
-async function processPlannedRepeat(reminder) {
-  let currentCycleTime;
-  if (!reminder.lastNotified) {
-    currentCycleTime = toMoscow(reminder.datetime);
-  } else {
-    currentCycleTime = toMoscow(reminder.nextReminder);
-  }
-  await sendPlannedReminderRepeated(reminder, currentCycleTime.toJSDate());
-  const nextOccurrence = computeNextTimeFromScheduled(currentCycleTime.toJSDate(), reminder.repeat);
-  reminder.nextReminder = nextOccurrence;
-  reminder.lastNotified = new Date();
-  await reminder.save();
 }
 
 /* ===============================
@@ -301,7 +302,7 @@ async function sendOneOffReminder(reminder) {
   const sentMessage = await bot.sendMessage(reminder.userId, messageText, inlineKeyboard);
   reminder.messageId = sentMessage.message_id;
   reminder.lastNotified = new Date();
-  reminder.postponedReminder = toMoscow(new Date()).plus({ minutes: 3 }).toJSDate();
+  reminder.postponedReminder = DateTime.local().setZone('Europe/Moscow').plus({ minutes: 3 }).toJSDate();
   await reminder.save();
   logger.info(`Одноразовое сообщение отправлено, messageId: ${sentMessage.message_id}`);
 }
@@ -310,7 +311,7 @@ async function sendOneOffReminder(reminder) {
  * Обрабатывает одноразовое уведомление при наступлении времени отложенного повторения.
  */
 async function processPostponedOneOff(reminder) {
-  await processPostponed(reminder, {}); // Для одноразовых уведомлений не передаём объект cycle
+  await processPostponed(reminder, {});
 }
 
 /* ===============================
@@ -385,7 +386,6 @@ async function handleCallback(query) {
           const hours = parseFloat(postponeValue);
           newDateTime = DateTime.local().plus({ hours }).toJSDate();
         }
-        // При ручном postpone сбрасываем все циклы и универсальные поля
         reminder.datetime = newDateTime;
         reminder.nextReminder = null;
         reminder.cycles = [];
