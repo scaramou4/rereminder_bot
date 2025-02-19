@@ -71,7 +71,8 @@ async function listReminders(userId) {
           completed: false,
           $or: [
             { repeat: { $ne: null } },
-            { datetime: { $gte: now } }
+            { datetime: { $gte: now } },
+            { postponedReminder: { $gte: now } }
           ]
         }
       },
@@ -80,7 +81,7 @@ async function listReminders(userId) {
           nextEvent: {
             $cond: [
               { $eq: ["$repeat", null] },
-              "$datetime",
+              { $ifNull: ["$postponedReminder", "$datetime"] },
               { $cond: [{ $gt: ["$nextReminder", "$datetime"] }, "$nextReminder", "$datetime"] }
             ]
           }
@@ -205,18 +206,21 @@ async function processPostponed(reminder, options = {}) {
 
 /**
  * Отправляет плановое уведомление для повторяющегося напоминания.
- * Теперь мы всегда используем reminder.nextReminder (если оно существует) как время текущего цикла.
- * После отправки нового планового уведомления обновляем reminder: устанавливаем reminder.datetime равным времени текущего цикла,
+ * Теперь мы всегда используем reminder.nextReminder как время текущего цикла.
+ * После отправки нового планового уведомления обновляем reminder: 
+ * устанавливаем reminder.datetime равным времени текущего цикла,
  * рассчитываем новое nextReminder, обновляем lastNotified и оставляем только последний цикл.
  */
 async function processPlannedRepeat(reminder) {
-  // Всегда используем nextReminder для определения текущего цикла
+  // Используем значение nextReminder, даже если оно уже в прошлом – оно является запланированным временем срабатывания
   const currentCycleTime = toMoscow(reminder.nextReminder);
   await sendPlannedReminderRepeated(reminder, currentCycleTime.toJSDate());
   const nextOccurrence = computeNextTimeFromScheduled(currentCycleTime.toJSDate(), reminder.repeat);
+  // Обновляем базовые поля: устанавливаем текущее запланированное время как базовое, вычисляем следующее событие
   reminder.datetime = currentCycleTime.toJSDate();
   reminder.nextReminder = nextOccurrence;
   reminder.lastNotified = new Date();
+  // Оставляем только последний цикл
   if (reminder.cycles && reminder.cycles.length > 0) {
     reminder.cycles = [reminder.cycles[reminder.cycles.length - 1]];
   }
@@ -386,6 +390,7 @@ async function handleCallback(query) {
           const hours = parseFloat(postponeValue);
           newDateTime = DateTime.local().plus({ hours }).toJSDate();
         }
+        // При ручном postpone сбрасываем все циклы и универсальные поля
         reminder.datetime = newDateTime;
         reminder.nextReminder = null;
         reminder.cycles = [];
