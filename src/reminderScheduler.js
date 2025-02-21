@@ -1,3 +1,4 @@
+// src/reminderScheduler.js
 const mongoose = require('mongoose');
 const { DateTime } = require('luxon');
 const bot = require('./botInstance');
@@ -12,12 +13,17 @@ mongoose
   .then(() => logger.info('Подключение к MongoDB установлено'))
   .catch((error) => logger.error('Ошибка подключения к MongoDB: ' + error.message));
 
+/* ===============================
+   1. CRUD-функции для напоминаний
+   =============================== */
+
 async function createReminder(userId, description, datetime, repeat) {
   try {
     let nextReminder = null;
     const now = DateTime.now().setZone('Europe/Moscow', { keepLocalTime: true });
     const dt = DateTime.fromJSDate(datetime, { zone: 'Europe/Moscow' });
     if (repeat) {
+      // Если дата события ещё в будущем, nextReminder = datetime, иначе вычисляем следующий цикл
       if (dt > now) {
         nextReminder = datetime;
       } else {
@@ -109,9 +115,17 @@ async function deleteReminder(reminderId) {
   }
 }
 
+/* ===============================
+   2. Вспомогательные функции
+   =============================== */
+
 function toMoscow(dt) {
   return DateTime.fromJSDate(dt, { zone: 'Europe/Moscow' });
 }
+
+/* ===============================
+   3. Логика отложенных уведомлений
+   =============================== */
 
 async function processPostponed(reminder, options = {}) {
   const displayTime = options.cycle 
@@ -176,6 +190,10 @@ async function processPostponed(reminder, options = {}) {
   }
 }
 
+/* ===============================
+   4. Логика повторяющихся уведомлений
+   =============================== */
+
 async function processPlannedRepeat(reminder) {
   const currentCycleTime = toMoscow(reminder.nextReminder);
   await sendPlannedReminderRepeated(reminder, currentCycleTime.toJSDate());
@@ -224,6 +242,10 @@ async function sendPlannedReminderRepeated(reminder, displayTimeOverride) {
   logger.info(`sendPlannedReminderRepeated: Цикл повтора обновлен для reminder ${reminder._id}: ${JSON.stringify(cycle)}`);
 }
 
+/* ===============================
+   5. Логика одноразовых уведомлений
+   =============================== */
+
 async function sendOneOffReminder(reminder) {
   const displayTime = toMoscow(reminder.datetime).toFormat('HH:mm');
   const messageText = `🔔 Напоминание: ${reminder.description}\n🕒 ${displayTime}`;
@@ -267,6 +289,10 @@ async function processPostponedCycles(reminder) {
   }
 }
 
+/* ===============================
+   6. Callback-обработчик
+   =============================== */
+
 async function handleCallback(query) {
   try {
     const data = query.data;
@@ -304,11 +330,9 @@ async function handleCallback(query) {
           const hours = parseFloat(postponeValue);
           newDateTime = DateTime.local().plus({ hours }).toJSDate();
         }
-        // Отменяем все задачи для этого напоминания, включая inertiaReminder
         await cancelReminderJobs(reminderId);
         const { agenda } = require('./agendaScheduler');
         await agenda.cancel({ 'data.reminderId': reminderId, name: 'inertiaReminder' });
-        // Обновляем данные напоминания и сбрасываем инерционные поля
         reminder.datetime = newDateTime;
         reminder.nextReminder = null;
         reminder.cycles = [];
@@ -334,7 +358,44 @@ async function handleCallback(query) {
         await bot.answerCallbackQuery(query.id, { text: 'Напоминание отсрочено' });
       }
     } else if (parts[0] === 'done') {
-      // ... остальная логика обработки кнопки "Готово"
+      const reminderId = parts[1];
+      const reminder = await Reminder.findById(reminderId);
+      if (!reminder) {
+        await bot.answerCallbackQuery(query.id, { text: 'Напоминание не найдено' });
+        return;
+      }
+      await cancelReminderJobs(reminderId);
+      if (reminder.repeat) {
+        const cycleIndex = reminder.cycles.findIndex(c => c.messageId === messageId);
+        if (cycleIndex !== -1) {
+          reminder.cycles.splice(cycleIndex, 1);
+          await reminder.save();
+          try {
+            await bot.editMessageText(`✅ ${reminder.description}`, { 
+              chat_id: chatId, 
+              message_id: messageId, 
+              reply_markup: { inline_keyboard: [] }
+            });
+          } catch (e) {
+            logger.error(`handleCallback (done): Ошибка редактирования сообщения для reminder ${reminder._id}: ${e.message}`);
+          }
+          await bot.answerCallbackQuery(query.id, { text: 'Цикл выполнен' });
+        } else {
+          await bot.answerCallbackQuery(query.id, { text: 'Цикл не найден' });
+        }
+      } else {
+        await Reminder.findByIdAndDelete(reminderId);
+        try {
+          await bot.editMessageText(`✅ ${reminder.description}`, { 
+            chat_id: chatId, 
+            message_id: messageId, 
+            reply_markup: { inline_keyboard: [] }
+          });
+        } catch (e) {
+          logger.error(`handleCallback (done): Ошибка редактирования сообщения для одноразового reminder ${reminder._id}: ${e.message}`);
+        }
+        await bot.answerCallbackQuery(query.id, { text: 'Напоминание выполнено' });
+      }
     }
   } catch (error) {
     logger.error(`handleCallback: Ошибка обработки callback: ${error.message}`);

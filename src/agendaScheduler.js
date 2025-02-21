@@ -3,6 +3,7 @@ const logger = require('./logger');
 const bot = require('./botInstance');
 const { DateTime } = require('luxon');
 const Reminder = require('./models/reminder');
+const { transformRepeatToAgenda } = require('./dateParser');
 
 const mongoConnectionString = process.env.MONGODB_URI || 'mongodb://localhost:27017/reminders';
 const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'agendaJobs' } });
@@ -57,7 +58,6 @@ agenda.define('inertiaReminder', async (job, done) => {
       logger.info(`inertiaReminder: Reminder ${reminderId} not found or completed. Cancelling job.`);
       return done();
     }
-    // Если это первый запуск инерции, редактируем исходное сообщение, иначе предыдущее инерционное
     if (!reminder.initialMessageEdited && reminder.messageId) {
       try {
         await bot.editMessageText(`Отложено: ${reminder.description}`, {
@@ -116,8 +116,10 @@ agenda.define('inertiaReminder', async (job, done) => {
 async function scheduleReminder(reminder) {
   try {
     if (reminder.repeat) {
-      const job = await agenda.every(reminder.repeat, 'sendReminder', { reminderId: reminder._id.toString() }, { timezone: 'Europe/Moscow', unique: { 'data.reminderId': reminder._id.toString() } });
-      logger.info(`scheduleReminder: Scheduled recurring reminder for reminder ${reminder._id} with interval "${reminder.repeat}". Job: ${JSON.stringify(job.attrs)}`);
+      // Преобразуем русский формат повторения в формат, понятный Agenda
+      const repeatInterval = transformRepeatToAgenda(reminder.repeat);
+      const job = await agenda.every(repeatInterval, 'sendReminder', { reminderId: reminder._id.toString() }, { timezone: 'Europe/Moscow', unique: { 'data.reminderId': reminder._id.toString() } });
+      logger.info(`scheduleReminder: Scheduled recurring reminder for reminder ${reminder._id} with interval "${repeatInterval}". Job: ${JSON.stringify(job.attrs)}`);
     } else {
       const job = await agenda.schedule(reminder.datetime, 'sendReminder', { reminderId: reminder._id.toString() });
       logger.info(`scheduleReminder: Scheduled one-off reminder for reminder ${reminder._id} at ${reminder.datetime}. Job: ${JSON.stringify(job.attrs)}`);

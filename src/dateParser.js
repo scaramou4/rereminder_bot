@@ -101,6 +101,37 @@ function getDeclension(unit, number) {
 }
 
 //////////////////////
+// Преобразование повторяющегося интервала для Agenda
+//////////////////////
+
+function transformRepeatToAgenda(russianRepeat) {
+  // Предполагаем, что russianRepeat имеет вид: "2 недели", "год", "день" и т.д.
+  let multiplier = 1;
+  let unit = russianRepeat;
+  const parts = russianRepeat.split(" ");
+  if (parts.length === 2) {
+    multiplier = parseInt(parts[0], 10);
+    unit = parts[1];
+  }
+  // Маппинг для перевода единиц с русского на английский (в единственном числе)
+  const mapping = {
+    'минута': 'minute',
+    'час': 'hour',
+    'день': 'day',
+    'неделя': 'week',
+    'месяц': 'month',
+    'год': 'year'
+  };
+  // Приводим unit к нормальной форме, если возможно
+  unit = unit.toLowerCase();
+  const englishUnit = mapping[unit] || unit;
+  if (multiplier > 1) {
+    return `${multiplier} ${englishUnit}s`;
+  }
+  return `${multiplier} ${englishUnit}`;
+}
+
+//////////////////////
 // Основные функции парсинга
 //////////////////////
 
@@ -123,18 +154,20 @@ function parseDate(text, format) {
 
 /**
  * Вычисляет следующее время повторения в московской зоне.
+ * Для повторов по дням недели, месяцам и годам всегда прибавляется полный период.
  */
 function computeNextTimeFromScheduled(scheduledTime, repeat) {
   const dt = DateTime.fromJSDate(scheduledTime, { zone: MOSCOW_ZONE });
   if (repeat in dayNameToWeekday) {
-    // Всегда добавляем неделю, т.к. это новый цикл
     return dt.plus({ weeks: 1 }).toJSDate();
   }
   const match = repeat.match(/^(\d+)?\s*(минут(?:а|ы|у)|час(?:а|ов|у)?|день(?:я|ей)?|недель(?:я|и|ю|)?|месяц(?:а|ев)?|год(?:а|ов)?)/i);
   let multiplier = 1;
   let unit = repeat;
   if (match) {
-    if (match[1]) multiplier = parseInt(match[1], 10);
+    if (match[1]) {
+      multiplier = parseInt(match[1], 10);
+    }
     unit = fuzzyCorrectUnit(match[2]).toLowerCase();
     unit = normalizeWord(unit);
   }
@@ -159,6 +192,8 @@ function computeNextTimeFromScheduled(scheduledTime, repeat) {
 /**
  * Парсит строку напоминания.
  * Текущее время берётся в московской зоне с сохранением локального времени.
+ * Для повторяющихся напоминаний с указанным временем, если время уже прошло,
+ * для единиц "неделя", "месяц", "год" прибавляется соответствующий период.
  */
 function parseReminder(text) {
   const normalizedText = normalizeTimeExpressions(text);
@@ -180,9 +215,8 @@ function parseReminder(text) {
       if (periodUnit in dayNameToWeekday) {
         const target = dayNameToWeekday[periodUnit];
         let diff = target - now.weekday;
-        if (diff < 0) diff += 7;
-        // Если сегодня – если время уже наступило, то выбираем следующий
-        if (diff === 0 && now.hour >= now.hour) diff = 7;
+        // Если день совпадает, всегда +7 дней (начало цикла)
+        if (diff <= 0) diff += 7;
         dt = now.plus({ days: diff });
       } else {
         dt = now;
@@ -198,8 +232,17 @@ function parseReminder(text) {
       const hour = parseInt(match[3], 10);
       const minute = match[4] ? parseInt(match[4], 10) : 0;
       dt = now.set({ hour, minute, second: 0, millisecond: 0 });
-      if (dt <= now) {
-        dt = dt.plus({ days: 1 });
+      // Для повторов "неделя", "месяц", "год" прибавляем период, если время уже прошло
+      if (["неделя", "месяц", "год"].includes(periodUnit)) {
+        if (dt <= now) {
+          if (periodUnit === "неделя") dt = dt.plus({ weeks: 1 });
+          else if (periodUnit === "месяц") dt = dt.plus({ months: 1 });
+          else if (periodUnit === "год") dt = dt.plus({ years: 1 });
+        }
+      } else {
+        if (dt <= now) {
+          dt = dt.plus({ days: 1 });
+        }
       }
       return {
         datetime: dt.toJSDate(),
@@ -334,5 +377,6 @@ module.exports = {
   normalizeTimeExpressions,
   parseDate,
   parseReminder,
-  computeNextTimeFromScheduled
+  computeNextTimeFromScheduled,
+  transformRepeatToAgenda
 };
