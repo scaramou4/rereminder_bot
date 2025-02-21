@@ -105,15 +105,21 @@ function getDeclension(unit, number) {
 //////////////////////
 
 function transformRepeatToAgenda(russianRepeat) {
-  // Предполагаем, что russianRepeat имеет вид: "2 недели", "год", "день" и т.д.
   let multiplier = 1;
-  let unit = russianRepeat;
-  const parts = russianRepeat.split(" ");
+  let unit = russianRepeat.trim();
+  const parts = russianRepeat.trim().split(" ");
   if (parts.length === 2) {
     multiplier = parseInt(parts[0], 10);
     unit = parts[1];
   }
-  // Маппинг для перевода единиц с русского на английский (в единственном числе)
+  unit = unit.toLowerCase();
+
+  // Если единица – день недели, возвращаем недельный интервал
+  const daysOfWeek = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"];
+  if (daysOfWeek.includes(unit)) {
+    return multiplier > 1 ? `${multiplier} weeks` : "1 week";
+  }
+
   const mapping = {
     'минута': 'minute',
     'час': 'hour',
@@ -122,13 +128,8 @@ function transformRepeatToAgenda(russianRepeat) {
     'месяц': 'month',
     'год': 'year'
   };
-  // Приводим unit к нормальной форме, если возможно
-  unit = unit.toLowerCase();
   const englishUnit = mapping[unit] || unit;
-  if (multiplier > 1) {
-    return `${multiplier} ${englishUnit}s`;
-  }
-  return `${multiplier} ${englishUnit}`;
+  return multiplier > 1 ? `${multiplier} ${englishUnit}s` : `${multiplier} ${englishUnit}`;
 }
 
 //////////////////////
@@ -165,9 +166,7 @@ function computeNextTimeFromScheduled(scheduledTime, repeat) {
   let multiplier = 1;
   let unit = repeat;
   if (match) {
-    if (match[1]) {
-      multiplier = parseInt(match[1], 10);
-    }
+    if (match[1]) multiplier = parseInt(match[1], 10);
     unit = fuzzyCorrectUnit(match[2]).toLowerCase();
     unit = normalizeWord(unit);
   }
@@ -194,6 +193,7 @@ function computeNextTimeFromScheduled(scheduledTime, repeat) {
  * Текущее время берётся в московской зоне с сохранением локального времени.
  * Для повторяющихся напоминаний с указанным временем, если время уже прошло,
  * для единиц "неделя", "месяц", "год" прибавляется соответствующий период.
+ * Для дней недели рассчитывается следующая дата указанного дня.
  */
 function parseReminder(text) {
   const normalizedText = normalizeTimeExpressions(text);
@@ -212,10 +212,10 @@ function parseReminder(text) {
     const repeatValue = multiplier === 1 ? periodUnit : `${multiplier} ${correctUnit}`;
     let dt;
     if (!match[3]) {
+      // Если время не указано, для дней недели всегда добавляем 7 дней, даже если сегодня
       if (periodUnit in dayNameToWeekday) {
         const target = dayNameToWeekday[periodUnit];
         let diff = target - now.weekday;
-        // Если день совпадает, всегда +7 дней (начало цикла)
         if (diff <= 0) diff += 7;
         dt = now.plus({ days: diff });
       } else {
@@ -231,15 +231,21 @@ function parseReminder(text) {
     } else {
       const hour = parseInt(match[3], 10);
       const minute = match[4] ? parseInt(match[4], 10) : 0;
-      dt = now.set({ hour, minute, second: 0, millisecond: 0 });
-      // Для повторов "неделя", "месяц", "год" прибавляем период, если время уже прошло
-      if (["неделя", "месяц", "год"].includes(periodUnit)) {
+      // Если период – день недели, вычисляем следующую дату этого дня с указанным временем
+      if (periodUnit in dayNameToWeekday) {
+        const target = dayNameToWeekday[periodUnit];
+        let diff = target - now.weekday;
+        if (diff <= 0) diff += 7;
+        dt = now.plus({ days: diff }).set({ hour, minute, second: 0, millisecond: 0 });
+      } else if (["неделя", "месяц", "год"].includes(periodUnit)) {
+        dt = now.set({ hour, minute, second: 0, millisecond: 0 });
         if (dt <= now) {
           if (periodUnit === "неделя") dt = dt.plus({ weeks: 1 });
           else if (periodUnit === "месяц") dt = dt.plus({ months: 1 });
           else if (periodUnit === "год") dt = dt.plus({ years: 1 });
         }
       } else {
+        dt = now.set({ hour, minute, second: 0, millisecond: 0 });
         if (dt <= now) {
           dt = dt.plus({ days: 1 });
         }
