@@ -3,22 +3,22 @@
  *
  * Модуль для нормализации временных выражений и парсинга дат с использованием Luxon.
  * Поддерживаются варианты:
- *   1. "кажд(?:ый|ую|дые) [<число>] <период> [в <час>(:<минут>)] <текст>" – повторяющееся уведомление.
- *      Примеры: "каждую минуту тест", "каждую 1 минуту тест", "каждый час тест часа 1629", "каждую пятницу тест"
- *   2. "через [<число>] <единица> <текст>" – разовое уведомление.
+ *   1. "каждый/каждая/каждое/каждые [<число>] <период> [в <час>(:<минут>)] <текст>"
+ *   2. "через [<число>] <единица> <текст>"
  *   3. "завтра [в <час>(:<минут>)] <текст>"
  *   4. "послезавтра [в <час>(:<минут>)] <текст>"
- *   5. "в <час> [час(ов)] [<минут> минут] <текст>", а также числовой формат без разделителя (например, "в1015 тест", "в 10:15 тест" или "в 10 15 тест")
+ *   5. Форматы вида "в 10:15 тест", "в1015 тест", "в 10.15 тест" и т.п.
  *
- * Если время не указано для повторяющихся уведомлений, вычисляется время первого срабатывания.
- * Для единиц повторения, представляющих дни недели (например, "пятница", "воскресенье", "понедельник"), если время не указано,
- * выбирается ближайшая дата с этим днём недели (с сохранением текущих часов и минут). Для таких уведомлений nextReminder вычисляется как datetime плюс 7 дней.
  * Все вычисления проводятся с учетом московской зоны.
  */
 
 const { DateTime } = require('luxon');
 
 const MOSCOW_ZONE = 'Europe/Moscow';
+
+//////////////////////
+// Нормализация единиц и дней недели
+//////////////////////
 
 const timeUnitNormalization = {
   'месяц': ['месяц', 'месяца', 'месяцев'],
@@ -60,6 +60,50 @@ const dayNameToWeekday = {
   'воскресенье': 7
 };
 
+//////////////////////
+// Фуззи-коррекция и склонение
+//////////////////////
+
+const fuzzyCorrections = {
+  'миут': 'минута',
+  'миют': 'минута',
+  'миу': 'минута',
+  'полсезавтра': 'послезавтра'
+};
+
+function fuzzyCorrectUnit(word) {
+  const lower = word.toLowerCase();
+  return fuzzyCorrections[lower] || word;
+}
+
+const unitDeclensions = {
+  'минута': { one: 'минута', few: 'минуты', many: 'минут' },
+  'час': { one: 'час', few: 'часа', many: 'часов' },
+  'день': { one: 'день', few: 'дня', many: 'дней' },
+  'неделя': { one: 'неделя', few: 'недели', many: 'недель' },
+  'месяц': { one: 'месяц', few: 'месяца', many: 'месяцев' },
+  'год': { one: 'год', few: 'года', many: 'лет' }
+};
+
+function getDeclension(unit, number) {
+  const forms = unitDeclensions[unit];
+  if (!forms) return unit;
+  number = Number(number);
+  const mod10 = number % 10;
+  const mod100 = number % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return forms.one;
+  } else if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) {
+    return forms.few;
+  } else {
+    return forms.many;
+  }
+}
+
+//////////////////////
+// Основные функции парсинга
+//////////////////////
+
 function normalizeWord(word) {
   const lowerWord = word.toLowerCase();
   if (timeUnitMap[lowerWord]) return timeUnitMap[lowerWord];
@@ -78,24 +122,24 @@ function parseDate(text, format) {
 }
 
 /**
- * Вычисляет следующее время повторения, учитывая множитель (если задан) и единицу.
- * Если repeat – это день недели (например, "пятница" или "воскресенье"), то прибавляется 7 дней.
- * Все вычисления проводятся в часовом поясе "Europe/Moscow".
+ * Вычисляет следующее время повторения в московской зоне.
+ * Для дней недели, если событие уже не наступило, можно вернуть его без прибавления недели.
  */
 function computeNextTimeFromScheduled(scheduledTime, repeat) {
   const dt = DateTime.fromJSDate(scheduledTime, { zone: MOSCOW_ZONE });
-  // Если repeat соответствует дню недели (в именительном падеже)
   if (repeat in dayNameToWeekday) {
+    // Всегда прибавляем неделю для повтора, т.к. после срабатывания это новое событие.
     return dt.plus({ weeks: 1 }).toJSDate();
   }
-  const match = repeat.match(/^(\d+)?\s*(минут(?:а|ы|у)|час(?:а|ов|у)?|день(?:я|ей)?|недел(?:я|и|ю)?|месяц(?:а|ев)?|год(?:а|ов)?)$/i);
+  const match = repeat.match(/^(\d+)?\s*(минут(?:а|ы|у)|час(?:а|ов|у)?|день(?:я|ей)?|недель(?:я|и|ю|)?|месяц(?:а|ев)?|год(?:а|ов)?)/i);
   let multiplier = 1;
   let unit = repeat;
   if (match) {
     if (match[1]) {
       multiplier = parseInt(match[1], 10);
     }
-    unit = match[2].toLowerCase();
+    unit = fuzzyCorrectUnit(match[2]).toLowerCase();
+    unit = normalizeWord(unit);
   }
   
   if (unit.match(/^минут/)) {
@@ -104,7 +148,7 @@ function computeNextTimeFromScheduled(scheduledTime, repeat) {
     return dt.plus({ hours: multiplier }).toJSDate();
   } else if (unit.match(/^день/)) {
     return dt.plus({ days: multiplier }).toJSDate();
-  } else if (unit.match(/^недел/)) {
+  } else if (unit.match(/^неделя/)) {
     return dt.plus({ weeks: multiplier }).toJSDate();
   } else if (unit.match(/^месяц/)) {
     return dt.plus({ months: multiplier }).toJSDate();
@@ -117,49 +161,39 @@ function computeNextTimeFromScheduled(scheduledTime, repeat) {
 
 /**
  * Парсит строку напоминания.
+ * Текущее время берётся в московской зоне с сохранением локального времени.
+ * Если ни один блок не сработал, выводится предупреждение в консоль.
  */
 function parseReminder(text) {
   const normalizedText = normalizeTimeExpressions(text);
-  // Используем текущую дату в московской зоне
-  const now = DateTime.local().setZone(MOSCOW_ZONE);
-
-  // 1. Обработка повторяющегося уведомления.
-  const repeatRegex = /^кажд(?:ый|ую|дые)(?:\s+(\d+))?\s+([А-Яа-яёЁ]+)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/iu;
+  const now = DateTime.now().setZone(MOSCOW_ZONE, { keepLocalTime: true });
+  
+  // 1. Повторяющееся уведомление: поддержка форм "каждый/каждая/каждое/каждые [N] <период> [в <час>(:<минут>)] <текст>"
+  const repeatRegex = /^кажд(?:ый|ая|ую|ое|ые)(?:\s+(\d+))?\s+([А-Яа-яёЁ]+)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/iu;
   let match = normalizedText.match(repeatRegex);
   if (match) {
     const multiplier = match[1] ? parseInt(match[1], 10) : 1;
-    // Нормализуем единицу повторения (например, "пятницу" -> "пятница", "воскресенье" -> "воскресенье")
-    let periodUnit = normalizeWord(match[2]);
+    let periodUnitRaw = match[2];
+    let periodUnit = fuzzyCorrectUnit(periodUnitRaw);
+    periodUnit = normalizeWord(periodUnit);
+    const correctUnit = multiplier === 1 ? periodUnit : getDeclension(periodUnit, multiplier);
     const reminderText = match[5].trim();
-    const repeatValue = multiplier === 1 ? periodUnit : `${multiplier} ${periodUnit}`;
+    const repeatValue = multiplier === 1 ? periodUnit : `${multiplier} ${correctUnit}`;
     let dt;
     if (!match[3]) {
-      // Если время не указано.
-      // Если periodUnit соответствует дню недели, вычисляем ближайшую дату этого дня, сохраняя текущие часы и минуты.
       if (periodUnit in dayNameToWeekday) {
-        const targetWeekday = dayNameToWeekday[periodUnit];
-        // Сохраним текущие часы и минуты
-        const currentHour = now.hour;
-        const currentMinute = now.minute;
-        dt = now.set({ hour: currentHour, minute: currentMinute, second: 0, millisecond: 0 });
-        // Если сегодня нужный день, но время уже прошло, или если сегодня не нужный день – найти ближайший нужный день
-        if (now.weekday === targetWeekday) {
-          if (dt <= now) {
-            dt = dt.plus({ weeks: 1 });
-          }
-        } else {
-          // Вычисляем разницу между целевым днем и сегодняшним
-          let diff = targetWeekday - now.weekday;
-          if (diff <= 0) diff += 7;
-          dt = dt.plus({ days: diff });
-        }
+        const target = dayNameToWeekday[periodUnit];
+        let diff = target - now.weekday;
+        // Если сегодня – если время ещё не наступило, оставить текущий день
+        if (diff < 0) diff += 7;
+        dt = now.plus({ days: diff });
       } else {
         dt = now;
       }
       const formattedTime = dt.toFormat('HH:mm');
       return {
         datetime: dt.toJSDate(),
-        reminderText: reminderText,
+        reminderText,
         timeSpec: `каждый ${repeatValue} начиная с ${formattedTime}`,
         repeat: repeatValue
       };
@@ -172,55 +206,39 @@ function parseReminder(text) {
       }
       return {
         datetime: dt.toJSDate(),
-        reminderText: reminderText,
+        reminderText,
         timeSpec: `каждый ${repeatValue} в ${hour}:${minute < 10 ? '0' + minute : minute}`,
         repeat: repeatValue
       };
     }
   }
   
-  // 2. Обработка разового уведомления "через ..."
+  // 2. Разовое уведомление "через ..."
   const throughRegex = /^через\s+(?:(\d+(?:\.\d+)?)\s+)?([A-Za-zА-Яа-яёЁ]+)\s+(.+)/i;
   match = normalizedText.match(throughRegex);
   if (match) {
     const number = match[1] ? parseFloat(match[1]) : 1;
-    const unit = match[2].toLowerCase();
+    let unit = fuzzyCorrectUnit(match[2].toLowerCase());
     const reminderText = match[3].trim();
     const unitMap = {
-      'минута': 'minutes',
-      'минуты': 'minutes',
-      'минут': 'minutes',
-      'минуту': 'minutes',
-      'час': 'hours',
-      'часа': 'hours',
-      'часов': 'hours',
-      'часу': 'hours',
-      'день': 'days',
-      'дня': 'days',
-      'дней': 'days',
-      'дню': 'days',
-      'неделя': 'weeks',
-      'недели': 'weeks',
-      'недель': 'weeks',
-      'неделю': 'weeks',
-      'месяц': 'months',
-      'месяца': 'months',
-      'месяцев': 'months',
-      'год': 'years',
-      'года': 'years',
-      'лет': 'years'
+      'минута': 'minutes', 'минуты': 'minutes', 'минут': 'minutes', 'минуту': 'minutes',
+      'час': 'hours', 'часа': 'hours', 'часов': 'hours', 'часу': 'hours',
+      'день': 'days', 'дня': 'days', 'дней': 'days', 'дню': 'days',
+      'неделя': 'weeks', 'недели': 'weeks', 'недель': 'weeks', 'неделю': 'weeks',
+      'месяц': 'months', 'месяца': 'months', 'месяцев': 'months',
+      'год': 'years', 'года': 'years', 'лет': 'years'
     };
     const durationKey = unitMap[unit] || 'minutes';
     const parsedDate = now.plus({ [durationKey]: number }).toJSDate();
     return {
       datetime: parsedDate,
-      reminderText: reminderText,
+      reminderText,
       timeSpec: `${number} ${unit}`,
       repeat: null
     };
   }
   
-  // 3. Обработка "завтра [в <час>(:<минут>)] <текст>"
+  // 3. "завтра ..."
   const tomorrowRegex = /^завтра(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/i;
   match = normalizedText.match(tomorrowRegex);
   if (match) {
@@ -230,31 +248,31 @@ function parseReminder(text) {
     const dt = now.plus({ days: 1 }).set({ hour, minute, second: 0, millisecond: 0 });
     return {
       datetime: dt.toJSDate(),
-      reminderText: reminderText,
+      reminderText,
       timeSpec: `завтра в ${hour}:${minute < 10 ? '0' + minute : minute}`,
       repeat: null
     };
   }
   
-  // 4. Обработка "послезавтра [в <час>(:<минут>)] <текст>"
-  const dayAfterTomorrowRegex = /^послезавтра(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/i;
+  // 4. "послезавтра" (также поддержка "полсезавтра" через fuzzyCorrectUnit)
+  const dayAfterTomorrowRegex = /^(послезавтра|полсезавтра)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/i;
   match = normalizedText.match(dayAfterTomorrowRegex);
   if (match) {
-    const hour = match[1] ? parseInt(match[1], 10) : now.hour;
-    const minute = match[2] ? parseInt(match[2], 10) : now.minute;
-    const reminderText = match[3].trim();
+    const hour = match[2] ? parseInt(match[2], 10) : now.hour;
+    const minute = match[3] ? parseInt(match[3], 10) : now.minute;
+    const reminderText = match[4].trim();
     const dt = now.plus({ days: 2 }).set({ hour, minute, second: 0, millisecond: 0 });
     return {
       datetime: dt.toJSDate(),
-      reminderText: reminderText,
+      reminderText,
       timeSpec: `послезавтра в ${hour}:${minute < 10 ? '0' + minute : minute}`,
       repeat: null
     };
   }
   
-  // 5. Обработка форматов для времени, начинающихся с "в"
-  // 5.1 Сначала пытаемся найти время с разделителем, например, "в 10:15 тест" или "в 10.15 тест"
-  const timeWithSeparatorRegex = /^в\s*(\d{1,2})\s*[:.,;\/]\s*(\d{1,2})\s+(.+)/i;
+  // 5. Форматы, начинающиеся с "в":
+  // 5.1 Формат с разделителем, например, "в 10:15 тест" или "в 10.15 тест"
+  const timeWithSeparatorRegex = /^в\s*(\d{1,2})\s*[:.,]\s*(\d{1,2})\s+(.+)/i;
   match = normalizedText.match(timeWithSeparatorRegex);
   if (match) {
     const hour = parseInt(match[1], 10);
@@ -264,13 +282,13 @@ function parseReminder(text) {
     if (dt <= now) dt = dt.plus({ days: 1 });
     return {
       datetime: dt.toJSDate(),
-      reminderText: reminderText,
+      reminderText,
       timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
       repeat: null
     };
   }
   
-  // 5.2 Затем пытаемся распознать числовой формат без разделителя, например, "в1015 тест"
+  // 5.2 Формат числовой без разделителя, например, "в1015 тест"
   const timeNumericRegex = /^в\s*(\d{3,4})\s+(.+)/i;
   match = normalizedText.match(timeNumericRegex);
   if (match) {
@@ -279,7 +297,7 @@ function parseReminder(text) {
     if (timeNum.length === 3) {
       hour = parseInt(timeNum.slice(0, 1), 10);
       minute = parseInt(timeNum.slice(1), 10);
-    } else { // длина 4
+    } else {
       hour = parseInt(timeNum.slice(0, 2), 10);
       minute = parseInt(timeNum.slice(2), 10);
     }
@@ -288,46 +306,13 @@ function parseReminder(text) {
     if (dt <= now) dt = dt.plus({ days: 1 });
     return {
       datetime: dt.toJSDate(),
-      reminderText: reminderText,
+      reminderText,
       timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
       repeat: null
     };
   }
   
-  // 5.3 Новый вариант для формата "в HH MM <текст>" (два числа, разделённые пробелом)
-  const timeSeparatedRegex = /^в\s+(\d{1,2})\s+(\d{1,2})\s+(.+)/i;
-  match = normalizedText.match(timeSeparatedRegex);
-  if (match) {
-    const hour = parseInt(match[1], 10);
-    const minute = parseInt(match[2], 10);
-    const reminderText = match[3].trim();
-    let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
-    if (dt <= now) dt = dt.plus({ days: 1 });
-    return {
-      datetime: dt.toJSDate(),
-      reminderText: reminderText,
-      timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
-      repeat: null
-    };
-  }
-  
-  // 5.4 Фолбэк вариант для формата "в <час> [час(ов)] [<минут> минут] <текст>"
-  const timeOnlyRegex = /^в\s+(\d{1,2})(?:(?:\s*(?:час(?:ов|а)?))\s*(\d{1,2})\s*(?:минут(?:ы|))?)?\s+(.+)/i;
-  match = normalizedText.match(timeOnlyRegex);
-  if (match) {
-    const hour = parseInt(match[1], 10);
-    const minute = match[2] ? parseInt(match[2], 10) : 0;
-    const reminderText = match[3].trim();
-    let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
-    if (dt <= now) dt = dt.plus({ days: 1 });
-    return {
-      datetime: dt.toJSDate(),
-      reminderText: reminderText,
-      timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
-      repeat: null
-    };
-  }
-  
+  console.warn(`parseReminder: Не удалось распознать входной текст: "${text}"`);
   return { datetime: null, reminderText: null, timeSpec: null, repeat: null };
 }
 
