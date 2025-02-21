@@ -7,7 +7,7 @@
  *   2. "через [<число>] <единица> <текст>"
  *   3. "завтра [в <час>(:<минут>)] <текст>"
  *   4. "послезавтра [в <час>(:<минут>)] <текст>"
- *   5. Форматы вида "в 10:15 тест", "в1015 тест", "в 10.15 тест" и т.п.
+ *   5. Форматы вида "в 10:15 тест", "в1015 тест", "в 10.15 тест", а также "в 17 ужин"
  *
  * Все вычисления проводятся с учетом московской зоны.
  */
@@ -123,12 +123,10 @@ function parseDate(text, format) {
 
 /**
  * Вычисляет следующее время повторения в московской зоне.
- * Для дней недели, если событие уже не наступило, можно вернуть его без прибавления недели.
  */
 function computeNextTimeFromScheduled(scheduledTime, repeat) {
   const dt = DateTime.fromJSDate(scheduledTime, { zone: MOSCOW_ZONE });
   if (repeat in dayNameToWeekday) {
-    // Всегда прибавляем неделю для повтора, т.к. после срабатывания это новое событие.
     return dt.plus({ weeks: 1 }).toJSDate();
   }
   const match = repeat.match(/^(\d+)?\s*(минут(?:а|ы|у)|час(?:а|ов|у)?|день(?:я|ей)?|недель(?:я|и|ю|)?|месяц(?:а|ев)?|год(?:а|ов)?)/i);
@@ -162,13 +160,12 @@ function computeNextTimeFromScheduled(scheduledTime, repeat) {
 /**
  * Парсит строку напоминания.
  * Текущее время берётся в московской зоне с сохранением локального времени.
- * Если ни один блок не сработал, выводится предупреждение в консоль.
  */
 function parseReminder(text) {
   const normalizedText = normalizeTimeExpressions(text);
   const now = DateTime.now().setZone(MOSCOW_ZONE, { keepLocalTime: true });
   
-  // 1. Повторяющееся уведомление: поддержка форм "каждый/каждая/каждое/каждые [N] <период> [в <час>(:<минут>)] <текст>"
+  // 1. Повторяющееся уведомление: "каждый/каждая/каждое/каждые [N] <период> [в <час>(:<минут>)] <текст>"
   const repeatRegex = /^кажд(?:ый|ая|ую|ое|ые)(?:\s+(\d+))?\s+([А-Яа-яёЁ]+)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/iu;
   let match = normalizedText.match(repeatRegex);
   if (match) {
@@ -184,7 +181,6 @@ function parseReminder(text) {
       if (periodUnit in dayNameToWeekday) {
         const target = dayNameToWeekday[periodUnit];
         let diff = target - now.weekday;
-        // Если сегодня – если время ещё не наступило, оставить текущий день
         if (diff < 0) diff += 7;
         dt = now.plus({ days: diff });
       } else {
@@ -238,7 +234,7 @@ function parseReminder(text) {
     };
   }
   
-  // 3. "завтра ..."
+  // 3. "завтра ..." 
   const tomorrowRegex = /^завтра(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/i;
   match = normalizedText.match(tomorrowRegex);
   if (match) {
@@ -254,7 +250,7 @@ function parseReminder(text) {
     };
   }
   
-  // 4. "послезавтра" (также поддержка "полсезавтра" через fuzzyCorrectUnit)
+  // 4. "послезавтра ..." (также поддержка для "полсезавтра")
   const dayAfterTomorrowRegex = /^(послезавтра|полсезавтра)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/i;
   match = normalizedText.match(dayAfterTomorrowRegex);
   if (match) {
@@ -308,6 +304,22 @@ function parseReminder(text) {
       datetime: dt.toJSDate(),
       reminderText,
       timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
+      repeat: null
+    };
+  }
+  
+  // 5.3 Фолбэк вариант для формата "в <час> <текст>" (например, "в 17 ужин")
+  const timeOnlyRegex = /^в\s+(\d{1,2})\s+(.+)/i;
+  match = normalizedText.match(timeOnlyRegex);
+  if (match) {
+    const hour = parseInt(match[1], 10);
+    const reminderText = match[2].trim();
+    let dt = now.set({ hour, minute: 0, second: 0, millisecond: 0 });
+    if (dt <= now) dt = dt.plus({ days: 1 });
+    return {
+      datetime: dt.toJSDate(),
+      reminderText,
+      timeSpec: `в ${hour}:00`,
       repeat: null
     };
   }
