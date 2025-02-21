@@ -1,4 +1,3 @@
-// src/models/reminder.js
 const mongoose = require('mongoose');
 
 const cycleSchema = new mongoose.Schema({
@@ -17,7 +16,10 @@ const reminderSchema = new mongoose.Schema({
   cycles: { type: [cycleSchema], default: [] },
   messageId: { type: Number, default: null },
   postponedReminder: { type: Date, default: null },
-  completed: { type: Boolean, default: false }
+  completed: { type: Boolean, default: false },
+  // Новые поля для инерционного цикла:
+  inertiaMessageId: { type: Number, default: null },
+  initialMessageEdited: { type: Boolean, default: false }
 });
 
 module.exports = mongoose.models.Reminder || mongoose.model('Reminder', reminderSchema);

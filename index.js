@@ -1,4 +1,3 @@
-// index.js
 require('dotenv').config();
 
 const bot = require('./src/botInstance');
@@ -11,7 +10,6 @@ const logger = require('./src/logger');
 const { DateTime } = require('luxon');
 const { agenda } = require('./src/agendaScheduler');
 
-// Запуск Agenda
 (async function() {
   await agenda.start();
   logger.info('Agenda запущен');

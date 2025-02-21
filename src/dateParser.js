@@ -127,15 +127,14 @@ function parseDate(text, format) {
 function computeNextTimeFromScheduled(scheduledTime, repeat) {
   const dt = DateTime.fromJSDate(scheduledTime, { zone: MOSCOW_ZONE });
   if (repeat in dayNameToWeekday) {
+    // Всегда добавляем неделю, т.к. это новый цикл
     return dt.plus({ weeks: 1 }).toJSDate();
   }
   const match = repeat.match(/^(\d+)?\s*(минут(?:а|ы|у)|час(?:а|ов|у)?|день(?:я|ей)?|недель(?:я|и|ю|)?|месяц(?:а|ев)?|год(?:а|ов)?)/i);
   let multiplier = 1;
   let unit = repeat;
   if (match) {
-    if (match[1]) {
-      multiplier = parseInt(match[1], 10);
-    }
+    if (match[1]) multiplier = parseInt(match[1], 10);
     unit = fuzzyCorrectUnit(match[2]).toLowerCase();
     unit = normalizeWord(unit);
   }
@@ -182,6 +181,8 @@ function parseReminder(text) {
         const target = dayNameToWeekday[periodUnit];
         let diff = target - now.weekday;
         if (diff < 0) diff += 7;
+        // Если сегодня – если время уже наступило, то выбираем следующий
+        if (diff === 0 && now.hour >= now.hour) diff = 7;
         dt = now.plus({ days: diff });
       } else {
         dt = now;
@@ -250,7 +251,7 @@ function parseReminder(text) {
     };
   }
   
-  // 4. "послезавтра ..." (также поддержка для "полсезавтра")
+  // 4. "послезавтра ..." (также поддержка "полсезавтра")
   const dayAfterTomorrowRegex = /^(послезавтра|полсезавтра)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/i;
   match = normalizedText.match(dayAfterTomorrowRegex);
   if (match) {

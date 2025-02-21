@@ -1,4 +1,3 @@
-// src/reminderScheduler.js
 const mongoose = require('mongoose');
 const { DateTime } = require('luxon');
 const bot = require('./botInstance');
@@ -13,44 +12,40 @@ mongoose
   .then(() => logger.info('Подключение к MongoDB установлено'))
   .catch((error) => logger.error('Ошибка подключения к MongoDB: ' + error.message));
 
-/* ===============================
-   1. CRUD-функции для напоминаний
-   =============================== */
-
-   async function createReminder(userId, description, datetime, repeat) {
-    try {
-      let nextReminder = null;
-      const now = DateTime.now().setZone('Europe/Moscow', { keepLocalTime: true });
-      const dt = DateTime.fromJSDate(datetime, { zone: 'Europe/Moscow' });
-      if (repeat) {
-        // Если дата события ещё в будущем, устанавливаем nextReminder = datetime,
-        // иначе вычисляем следующий запуск
-        if (dt > now) {
-          nextReminder = datetime;
-        } else {
-          nextReminder = computeNextTimeFromScheduled(datetime, repeat);
-        }
-        logger.info(`createReminder: Для повторяющегося напоминания вычислено nextReminder: ${nextReminder}`);
+async function createReminder(userId, description, datetime, repeat) {
+  try {
+    let nextReminder = null;
+    const now = DateTime.now().setZone('Europe/Moscow', { keepLocalTime: true });
+    const dt = DateTime.fromJSDate(datetime, { zone: 'Europe/Moscow' });
+    if (repeat) {
+      if (dt > now) {
+        nextReminder = datetime;
+      } else {
+        nextReminder = computeNextTimeFromScheduled(datetime, repeat);
       }
-      const reminder = new Reminder({
-        userId,
-        description,
-        datetime,
-        repeat: repeat || null,
-        nextReminder,
-        lastNotified: null,
-        cycles: [],
-        messageId: null,
-        postponedReminder: null
-      });
-      await reminder.save();
-      logger.info(`createReminder: Напоминание создано для user ${userId} на ${datetime}`);
-      await scheduleReminder(reminder);
-      return reminder;
-    } catch (error) {
-      logger.error(`createReminder: Ошибка при создании напоминания: ${error.message}`);
+      logger.info(`createReminder: Для повторяющегося напоминания вычислено nextReminder: ${nextReminder}`);
     }
+    const reminder = new Reminder({
+      userId,
+      description,
+      datetime,
+      repeat: repeat || null,
+      nextReminder,
+      lastNotified: null,
+      cycles: [],
+      messageId: null,
+      postponedReminder: null,
+      inertiaMessageId: null,
+      initialMessageEdited: false
+    });
+    await reminder.save();
+    logger.info(`createReminder: Напоминание создано для user ${userId} на ${datetime}`);
+    await scheduleReminder(reminder);
+    return reminder;
+  } catch (error) {
+    logger.error(`createReminder: Ошибка при создании напоминания: ${error.message}`);
   }
+}
 
 async function listReminders(userId) {
   try {
@@ -114,17 +109,9 @@ async function deleteReminder(reminderId) {
   }
 }
 
-/* ===============================
-   2. Вспомогательные функции
-   =============================== */
-
 function toMoscow(dt) {
   return DateTime.fromJSDate(dt, { zone: 'Europe/Moscow' });
 }
-
-/* ===============================
-   3. Логика отложенных уведомлений
-   =============================== */
 
 async function processPostponed(reminder, options = {}) {
   const displayTime = options.cycle 
@@ -139,7 +126,7 @@ async function processPostponed(reminder, options = {}) {
         reply_markup: { inline_keyboard: [] },
         parse_mode: "HTML" 
       });
-      logger.info(`processPostponed: Основное сообщение reminder ${reminder._id} отредактировано (отложено), cycle: ${JSON.stringify(options.cycle)}`);
+      logger.info(`processPostponed: Отредактировано инерционное сообщение reminder ${reminder._id} (удалены кнопки), cycle: ${JSON.stringify(options.cycle)}`);
     } else {
       await bot.editMessageText(editText, {
         chat_id: reminder.userId,
@@ -147,7 +134,7 @@ async function processPostponed(reminder, options = {}) {
         reply_markup: { inline_keyboard: [] },
         parse_mode: "HTML"
       });
-      logger.info(`processPostponed: Одноразовое сообщение reminder ${reminder._id} отредактировано (отложено)`);
+      logger.info(`processPostponed: Отредактировано исходное сообщение reminder ${reminder._id} (удалены кнопки)`);
     }
   } catch (err) {
     logger.error(`processPostponed: Ошибка редактирования сообщения для reminder ${reminder._id}: ${err.message}`);
@@ -188,10 +175,6 @@ async function processPostponed(reminder, options = {}) {
     logger.error(`processPostponed: Ошибка отправки нового сообщения для reminder ${reminder._id}: ${err.message}`);
   }
 }
-
-/* ===============================
-   4. Логика повторяющихся уведомлений
-   =============================== */
 
 async function processPlannedRepeat(reminder) {
   const currentCycleTime = toMoscow(reminder.nextReminder);
@@ -241,10 +224,6 @@ async function sendPlannedReminderRepeated(reminder, displayTimeOverride) {
   logger.info(`sendPlannedReminderRepeated: Цикл повтора обновлен для reminder ${reminder._id}: ${JSON.stringify(cycle)}`);
 }
 
-/* ===============================
-   5. Логика одноразовых уведомлений
-   =============================== */
-
 async function sendOneOffReminder(reminder) {
   const displayTime = toMoscow(reminder.datetime).toFormat('HH:mm');
   const messageText = `🔔 Напоминание: ${reminder.description}\n🕒 ${displayTime}`;
@@ -276,10 +255,6 @@ async function processPostponedOneOff(reminder) {
   await processPostponed(reminder, {});
 }
 
-/* ===============================
-   6. Обработка инерционного цикла (бездействия)
-   =============================== */
-
 async function processPostponedCycles(reminder) {
   if (reminder.cycles && reminder.cycles.length > 0) {
     const cycle = reminder.cycles[reminder.cycles.length - 1];
@@ -291,10 +266,6 @@ async function processPostponedCycles(reminder) {
     }
   }
 }
-
-/* ===============================
-   7. Callback-обработчик
-   =============================== */
 
 async function handleCallback(query) {
   try {
@@ -400,10 +371,6 @@ async function handleCallback(query) {
     logger.error(`handleCallback: Ошибка обработки callback: ${error.message}`);
   }
 }
-
-/* ===============================
-   8. Экспорт функций и модели
-   =============================== */
 
 module.exports = {
   createReminder,
