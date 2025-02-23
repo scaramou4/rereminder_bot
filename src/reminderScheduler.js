@@ -61,6 +61,7 @@ async function listReminders(userId) {
         $match: {
           userId: userId.toString(),
           completed: false,
+          // Берем только напоминания, где ближайшее событие не прошло
           $or: [
             { repeat: { $ne: null } },
             { datetime: { $gte: now } },
@@ -72,13 +73,14 @@ async function listReminders(userId) {
         $addFields: {
           nextEvent: {
             $cond: [
-              { $eq: ["$repeat", null] },
-              { $ifNull: ["$postponedReminder", "$datetime"] },
-              { $cond: [{ $gt: ["$nextReminder", "$datetime"] }, "$nextReminder", "$datetime"] }
+              { $ne: ["$repeat", null] },
+              { $ifNull: ["$nextReminder", "$datetime"] },
+              { $ifNull: ["$postponedReminder", "$datetime"] }
             ]
           }
         }
       },
+      { $match: { nextEvent: { $gte: now } } },
       { $sort: { nextEvent: 1 } }
     ]);
     logger.info(`listReminders: Найдено ${reminders.length} напоминаний для user ${userId}`);
