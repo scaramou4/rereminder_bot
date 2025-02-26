@@ -2,6 +2,7 @@ const bot = require('./botInstance');
 const { listReminders, deleteReminder } = require('./reminderScheduler');
 const logger = require('./logger');
 const { DateTime } = require('luxon');
+const throttle = require('lodash/throttle'); // Установить через npm install lodash
 
 async function renderList(chatId, page, deleteMode) {
   try {
@@ -20,7 +21,6 @@ async function renderList(chatId, page, deleteMode) {
     let text = `Ваши предстоящие уведомления:\n\n`;
     pageReminders.forEach((reminder, idx) => {
       const num = startIndex + idx + 1;
-      // Форматирование nextEvent: "HH:mm, d MMMM yyyy"
       const formattedTime = DateTime.fromJSDate(reminder.nextEvent)
         .setZone('Europe/Moscow')
         .setLocale('ru')
@@ -43,7 +43,6 @@ async function renderList(chatId, page, deleteMode) {
         ]
       ];
     } else {
-      // В режиме удаления для каждого уведомления создаем кнопку с его номером
       let rows = [];
       let row = [];
       pageReminders.forEach((reminder, idx) => {
@@ -54,7 +53,6 @@ async function renderList(chatId, page, deleteMode) {
          }
       });
       if (row.length > 0) rows.push(row);
-      // Добавляем кнопку "Отмена" для выхода из режима удаления
       rows.push([{ text: "Отмена", callback_data: `list_cancel|${page}` }]);
       keyboard = rows;
     }
@@ -87,59 +85,63 @@ async function sendPaginatedList(chatId, page, deleteMode, messageId = null) {
 }
 
 async function handleListCallback(query) {
-  try {
-    const data = query.data;
-    const chatId = query.message.chat.id;
-    const messageId = query.message.message_id;
-    const parts = data.split("|");
-    let action = parts[0];
-    let currentPage = parts[1] ? parseInt(parts[1], 10) : 0;
-    let newPage = currentPage;
-    let deleteMode = false;
-    
-    if (action === "list_first") {
-      newPage = 0;
-    } else if (action === "list_prev") {
-      newPage = currentPage - 1;
-      if (newPage < 0) newPage = 0;
-    } else if (action === "list_next") {
-      const reminders = await listReminders(chatId);
-      const totalPages = Math.ceil(reminders.length / 10);
-      newPage = currentPage + 1;
-      if (newPage >= totalPages) newPage = totalPages - 1;
-    } else if (action === "list_last") {
-      const reminders = await listReminders(chatId);
-      const totalPages = Math.ceil(reminders.length / 10);
-      newPage = totalPages - 1;
-    } else if (action === "list_toggle") {
-      deleteMode = true;
-      newPage = currentPage;
-    } else if (action === "list_cancel") {
-      deleteMode = false;
-      newPage = currentPage;
-    } else if (action === "list_delete") {
-      // Реализуем удаление уведомления
-      const reminderId = parts[1];
-      newPage = parts[2] ? parseInt(parts[2], 10) : currentPage;
-      const deletedReminder = await deleteReminder(reminderId);
-      if (deletedReminder) {
-        await bot.sendMessage(chatId, `Напоминание "${deletedReminder.description}" удалено`);
-      } else {
-        await bot.sendMessage(chatId, "Ошибка удаления уведомления");
-      }
-      deleteMode = false; // После удаления переходим в обычный режим
-    }
-    
-    await sendPaginatedList(chatId, newPage, deleteMode, messageId);
-    await bot.answerCallbackQuery(query.id);
-  } catch (error) {
-    logger.error(`Ошибка обработки callback запроса списка: ${error.message}`);
+  // Ограничим вызов на 500 мс
+  const throttledCallback = throttle(async (query) => {
     try {
-      await bot.answerCallbackQuery(query.id, { text: 'Ошибка обработки запроса', show_alert: true });
-    } catch (err) {
-      logger.error(`Ошибка отправки callback ответа: ${err.message}`);
+      const data = query.data;
+      const chatId = query.message.chat.id;
+      const messageId = query.message.message_id;
+      const parts = data.split("|");
+      let action = parts[0];
+      let currentPage = parts[1] ? parseInt(parts[1], 10) : 0;
+      let newPage = currentPage;
+      let deleteMode = false;
+      
+      if (action === "list_first") {
+        newPage = 0;
+      } else if (action === "list_prev") {
+        newPage = currentPage - 1;
+        if (newPage < 0) newPage = 0;
+      } else if (action === "list_next") {
+        const reminders = await listReminders(chatId);
+        const totalPages = Math.ceil(reminders.length / 10);
+        newPage = currentPage + 1;
+        if (newPage >= totalPages) newPage = totalPages - 1;
+      } else if (action === "list_last") {
+        const reminders = await listReminders(chatId);
+        const totalPages = Math.ceil(reminders.length / 10);
+        newPage = totalPages - 1;
+      } else if (action === "list_toggle") {
+        deleteMode = true;
+        newPage = currentPage;
+      } else if (action === "list_cancel") {
+        deleteMode = false;
+        newPage = currentPage;
+      } else if (action === "list_delete") {
+        const reminderId = parts[1];
+        newPage = parts[2] ? parseInt(parts[2], 10) : currentPage;
+        const deletedReminder = await deleteReminder(reminderId);
+        if (deletedReminder) {
+          await bot.sendMessage(chatId, `Напоминание "${deletedReminder.description}" удалено`);
+        } else {
+          await bot.sendMessage(chatId, "Ошибка удаления уведомления");
+        }
+        deleteMode = false;
+      }
+      
+      await sendPaginatedList(chatId, newPage, deleteMode, messageId);
+      await bot.answerCallbackQuery(query.id);
+    } catch (error) {
+      logger.error(`Ошибка обработки callback запроса списка: ${error.message}`);
+      try {
+        await bot.answerCallbackQuery(query.id, { text: 'Ошибка обработки запроса', show_alert: true });
+      } catch (err) {
+        logger.error(`Ошибка отправки callback ответа: ${err.message}`);
+      }
     }
-  }
+  }, 500);
+
+  await throttledCallback(query);
 }
 
 module.exports = {

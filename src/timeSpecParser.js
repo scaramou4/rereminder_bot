@@ -1,74 +1,77 @@
 const { DateTime } = require('luxon');
 
-/**
- * Парсит входной текст как относительную длительность.
- * Поддерживаются варианты: "30 минут", "через 1.5 часа", "через 1 день", "через 2 недели", "через 3 года" и т.п.
- * Если единица – "час", дробная часть интерпретируется как (fraction * 60) минут.
- * Также поддерживаются разделители для времени (например, "10:30", "10,30", "10.30", "10;30", "10/30").
- * Возвращается объект { datetime } – новое время, вычисленное от текущего момента.
- * Если парсинг не удался, возвращается { datetime: null }.
- */
 function parseTimeSpec(text) {
-  text = text.trim();
-  // Если текст содержит разделитель между числовыми значениями, пытаемся распарсить как время.
-  const timeSeparatorRegex = /^(\d{1,2})\s*(?:[:.,;/])\s*(\d{1,2})$/;
-  let match = text.match(timeSeparatorRegex);
-  if (match) {
-    const hour = parseInt(match[1], 10);
-    const minute = parseInt(match[2], 10);
-    const newDateTime = DateTime.local().set({ hour, minute, second: 0, millisecond: 0 }).toJSDate();
-    return { datetime: newDateTime };
-  }
-  
-  // Основное регулярное выражение для относительной длительности
-  const regex = /^(?:через\s+)?(\d+(?:\.\d+)?)\s+([\p{L}]+)/iu;
-  match = text.match(regex);
-  if (match) {
-    let number = parseFloat(match[1]);
-    const unitRaw = match[2].toLowerCase();
-    const unitMap = {
-      'минута': 'minutes',
-      'минуты': 'minutes',
-      'минут': 'minutes',
-      'минуту': 'minutes',
-      'час': 'hours',
-      'часа': 'hours',
-      'часов': 'hours',
-      'часу': 'hours',
-      'день': 'days',
-      'дня': 'days',
-      'дней': 'days',
-      'дню': 'days',
-      'неделя': 'weeks',
-      'недели': 'weeks',
-      'недель': 'weeks',
-      'неделю': 'weeks',
-      'год': 'years',
-      'года': 'years',
-      'лет': 'years'
-    };
-    const unit = unitMap[unitRaw] || null;
-    if (!unit) return { datetime: null };
-    if (unit === 'hours') {
-      const whole = Math.floor(number);
-      const fraction = number - whole;
-      const minutes = Math.round(fraction * 60);
-      const newDateTime = DateTime.local().plus({ hours: whole, minutes }).toJSDate();
-      return { datetime: newDateTime };
+  const now = DateTime.local().setZone('Europe/Moscow');
+  const timeUnits = {
+    'мин': 'minutes', 'минут': 'minutes', 'минуты': 'minutes',
+    'час': 'hours', 'часа': 'hours', 'часов': 'hours',
+    'день': 'days', 'дня': 'days', 'дней': 'days',
+    'неделя': 'weeks', 'недели': 'weeks', 'недель': 'weeks'
+  };
+
+  // Поддержка всех вариантов из postponeOptions
+  const postponeOptionsMap = {
+    '5 мин': 5 * 60 * 1000, // 5 минут в миллисекундах
+    '10 мин': 10 * 60 * 1000, // 10 минут
+    '15 мин': 15 * 60 * 1000, // 15 минут
+    '30 мин': 30 * 60 * 1000, // 30 минут
+    '1 час': 1 * 60 * 60 * 1000, // 1 час
+    '2 часа': 2 * 60 * 60 * 1000, // 2 часа
+    '3 часа': 3 * 60 * 60 * 1000, // 3 часа
+    '4 часа': 4 * 60 * 60 * 1000, // 4 часа
+    '1 день': 1 * 24 * 60 * 60 * 1000, // 1 день
+    '2 дня': 2 * 24 * 60 * 60 * 1000, // 2 дня
+    '3 дня': 3 * 24 * 60 * 60 * 1000, // 3 дня
+    '7 дней': 7 * 24 * 60 * 60 * 1000, // 7 дней
+    'утро': null, // Установим позже как 9:00 следующего дня
+    'вечером': null, // Установим позже как 18:00 текущего дня
+    '…': null // Кастомный ввод, пропускаем (будет обработан через pendingPostpone)
+  };
+
+  // Проверка на точное совпадение с postponeOptions
+  const normalizedText = text.toLowerCase().trim();
+  if (postponeOptionsMap[normalizedText]) {
+    if (normalizedText === 'утро') {
+      return { datetime: now.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0, millisecond: 0 }).toJSDate() };
+    } else if (normalizedText === 'вечером') {
+      return { datetime: now.set({ hour: 18, minute: 0, second: 0, millisecond: 0 }).plus({ days: now.hour >= 18 ? 1 : 0 }).toJSDate() };
+    } else if (normalizedText === '…') {
+      return { datetime: null }; // Для кастомного ввода
     } else {
-      const newDateTime = DateTime.local().plus({ [unit]: number }).toJSDate();
-      return { datetime: newDateTime };
+      const milliseconds = postponeOptionsMap[normalizedText];
+      return { datetime: now.plus({ milliseconds }).toJSDate() };
     }
   }
+
+  // Общий регекс для парсинга числовых длительностей (например, "10 минут", "1.5 часа")
+  const timeRegex = /^(\d+(?:\.\d+)?)\s+([а-яё]+)$/i;
+  const match = normalizedText.match(timeRegex);
+  if (match) {
+    const number = parseFloat(match[1]);
+    const unit = match[2];
+    const englishUnit = timeUnits[unit] || 'minutes';
+    if (number <= 0) {
+      return { datetime: null };
+    }
+    return { datetime: now.plus({ [englishUnit]: number }).toJSDate() };
+  }
+
+  // Проверка формата времени "HH:MM" или "HH"
+  const timeFormatRegex = /^(\d{1,2})(?::(\d{2}))?$/;
+  const timeMatch = normalizedText.match(timeFormatRegex);
+  if (timeMatch) {
+    const hour = parseInt(timeMatch[1], 10);
+    const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      return { datetime: now.set({ hour, minute, second: 0, millisecond: 0 }).toJSDate() };
+    }
+  }
+
   return { datetime: null };
 }
 
-/**
- * Форматирует дату в виде "HH:mm, d MMMM yyyy", например: "14:16, 12 февраля 2025".
- * Использует локаль 'ru' для вывода месяца на русском языке.
- */
 function formatDate(date) {
-  return DateTime.fromJSDate(date).setLocale('ru').toFormat('HH:mm, d MMMM yyyy');
+  return DateTime.fromJSDate(date).setZone('Europe/Moscow').setLocale('ru').toFormat('HH:mm, d MMMM yyyy');
 }
 
 module.exports = {
