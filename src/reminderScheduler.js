@@ -10,15 +10,13 @@ const { parseTimeSpec } = require('./timeSpecParser');
 const { agenda, defineSendReminderJob, scheduleReminder, cancelReminderJobs } = require('./agendaScheduler');
 const Reminder = require('./models/reminder');
 const UserSettings = require('./models/userSettings');
-const { showPostponeSettingsMenu, handleSettingsCallback, getUserTimezone } = require('./settings');
+const { showPostponeSettingsMenu, handleSettingsCallback, getUserTimezone, showSettingsMenu } = require('./settings');
 
-// Запуск подключения к MongoDB
 mongoose
   .connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/reminders')
   .then(() => logger.info('Подключение к MongoDB установлено'))
   .catch((error) => logger.error('Ошибка подключения к MongoDB: ' + error.message));
 
-// Определяем задачу "sendReminder"
 defineSendReminderJob(sendReminder);
 
 async function createReminder(userId, description, datetime, repeat) {
@@ -101,11 +99,13 @@ async function handleCallback(query) {
   const messageId = query.message.message_id;
   logger.info(`handleCallback: Получен callback с данными: ${data}`);
 
+  // Если callback для настроек
   if (data.startsWith('settings_')) {
     await handleSettingsCallback(query);
     return;
   }
 
+  // Обработка кнопки "Готово" под уведомлением
   if (data.startsWith('done|')) {
     const reminderId = data.split('|')[1];
     try {
@@ -122,7 +122,8 @@ async function handleCallback(query) {
       await bot.editMessageText(`✅ Готово: ${reminder.description}`, {
         chat_id: chatId,
         message_id: messageId,
-        reply_markup: { inline_keyboard: [] }
+        reply_markup: { inline_keyboard: [] },
+        parse_mode: "HTML"
       });
       await bot.answerCallbackQuery(query.id, { text: 'Напоминание отмечено как выполненное.' });
     } catch (err) {
@@ -130,8 +131,57 @@ async function handleCallback(query) {
       await bot.answerCallbackQuery(query.id, { text: 'Ошибка при завершении напоминания.', show_alert: true });
     }
     return;
-  } else if (data.startsWith('postpone|')) {
-    const [ , option, reminderId ] = data.split('|');
+  }
+
+  // Обработка кнопки "ОК" для откладывания под уведомлением
+  if (data.startsWith("postpone_ok|")) {
+    const reminderId = data.split('|')[1];
+    try {
+      const reminder = await Reminder.findById(reminderId);
+      if (!reminder) {
+        await bot.sendMessage(chatId, 'Напоминание не найдено.');
+        return;
+      }
+      await cancelReminderJobs(reminderId);
+      await bot.editMessageText(`✅ Готово: ${reminder.description}`, {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [] },
+        parse_mode: "HTML"
+      });
+      await bot.answerCallbackQuery(query.id, { text: 'Напоминание отмечено как выполненное.' });
+    } catch (err) {
+      logger.error(`handleCallback: Ошибка обработки "ОК" для reminder ${reminderId}: ${err.message}`);
+      await bot.answerCallbackQuery(query.id, { text: 'Ошибка при обработке.', show_alert: true });
+    }
+    return;
+  }
+
+  // Обработка откладывания
+  if (data.startsWith('postpone|')) {
+    const parts = data.split('|');
+    const option = parts[1];
+    const reminderId = parts[2];
+    // Определяем мэппинг опций откладывания
+    const postponeOptionMap = {
+      "5m": "5 мин",
+      "10m": "10 мин",
+      "15m": "15 мин",
+      "30m": "30 мин",
+      "1h": "1 час",
+      "2h": "2 часа",
+      "3h": "3 часа",
+      "4h": "4 часа",
+      "1d": "1 день",
+      "2d": "2 дня",
+      "3d": "3 дня",
+      "7d": "7 дней",
+      "1w": "1 неделя",
+      "am": "утро",
+      "pm": "вечер",
+      "…": "…"
+    };
+    let fullOption; // переменная для полного текста опции
     try {
       const reminder = await Reminder.findById(reminderId);
       if (!reminder) {
@@ -147,23 +197,18 @@ async function handleCallback(query) {
       } else if (option === "am") {
         newDateTime = DateTime.local().setZone(getUserTimezone(chatId))
           .plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0, millisecond: 0 }).toJSDate();
+        fullOption = "утро";
       } else if (option === "pm") {
         newDateTime = DateTime.local().setZone(getUserTimezone(chatId))
           .set({ hour: 18, minute: 0, second: 0, millisecond: 0 })
           .plus({ days: (DateTime.local().setZone(getUserTimezone(chatId)).hour >= 18 ? 1 : 0) }).toJSDate();
+        fullOption = "вечер";
       } else {
-        // Определяем optionMap локально
-        const optionMap = {
-          "5m": "5 мин", "10m": "10 мин", "15m": "15 мин", "30m": "30 мин",
-          "1h": "1 час", "2h": "2 часа", "3h": "3 часа", "4h": "4 часа",
-          "1d": "1 день", "2d": "2 дня", "3d": "3 дня", "7d": "7 дней",
-          "1w": "1 неделя"
-        };
-        const fullOption = optionMap[option] || option;
+        fullOption = postponeOptionMap[option] || option;
         const settings = await UserSettings.findOne({ userId: chatId.toString() });
-        const userPostponeSettings = (settings?.selectedPostponeSettings && settings.selectedPostponeSettings.length
+        const userPostponeSettings = (settings?.selectedPostponeSettings && settings.selectedPostponeSettings.length)
           ? settings.selectedPostponeSettings
-          : ["30 мин", "1 час", "3 часа", "утро", "вечер"]);
+          : ["30 мин", "1 час", "3 часа", "утро", "вечер"];
         if (!userPostponeSettings.includes(fullOption)) {
           await bot.answerCallbackQuery(query.id, { text: 'Этот вариант времени откладывания не настроен. Перейдите в настройки.', show_alert: true });
           return;
@@ -181,8 +226,7 @@ async function handleCallback(query) {
         await bot.sendMessage(chatId, `Вы уже отложили это напоминание ${reminder.postponedCount} раз. Уверены, что хотите отложить ещё?`, {
           reply_markup: {
             inline_keyboard: [
-              [{ text: "Да", callback_data: `postpone_confirm|${option}|${reminderId}` }],
-              [{ text: "Нет", callback_data: `postpone_cancel|${reminderId}` }]
+              [{ text: "Да", callback_data: `postpone_confirm|${option}|${reminderId}` }]
             ]
           }
         });
@@ -202,16 +246,37 @@ async function handleCallback(query) {
         reply_markup: { inline_keyboard: [] },
         parse_mode: "HTML"
       });
-      await bot.answerCallbackQuery(query.id, { text: `Напоминание отложено на ${option}` });
+      await bot.answerCallbackQuery(query.id, { text: `Напоминание отложено на ${fullOption}.` });
     } catch (err) {
       logger.error(`handleCallback: Ошибка обработки postpone для reminder ${reminderId}: ${err.message}`);
       await bot.answerCallbackQuery(query.id, { text: 'Ошибка при откладывании напоминания.', show_alert: true });
     }
     return;
   }
-  
+
   if (data.startsWith("postpone_confirm|")) {
-    const [ , option, reminderId ] = data.split('|');
+    const parts = data.split('|');
+    const option = parts[1];
+    const reminderId = parts[2];
+    const postponeOptionMap = {
+      "5m": "5 мин",
+      "10m": "10 мин",
+      "15m": "15 мин",
+      "30m": "30 мин",
+      "1h": "1 час",
+      "2h": "2 часа",
+      "3h": "3 часа",
+      "4h": "4 часа",
+      "1d": "1 день",
+      "2d": "2 дня",
+      "3d": "3 дня",
+      "7d": "7 дней",
+      "1w": "1 неделя",
+      "am": "утро",
+      "pm": "вечер",
+      "…": "…"
+    };
+    let fullOption;
     try {
       const reminder = await Reminder.findById(reminderId);
       if (!reminder) {
@@ -222,18 +287,14 @@ async function handleCallback(query) {
       if (option === "am") {
         newDateTime = DateTime.local().setZone(getUserTimezone(chatId))
           .plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0, millisecond: 0 }).toJSDate();
+        fullOption = "утро";
       } else if (option === "pm") {
         newDateTime = DateTime.local().setZone(getUserTimezone(chatId))
           .set({ hour: 18, minute: 0, second: 0, millisecond: 0 })
           .plus({ days: (DateTime.local().setZone(getUserTimezone(chatId)).hour >= 18 ? 1 : 0) }).toJSDate();
+        fullOption = "вечер";
       } else {
-        const optionMap = {
-          "5m": "5 мин", "10m": "10 мин", "15m": "15 мин", "30m": "30 мин",
-          "1h": "1 час", "2h": "2 часа", "3h": "3 часа", "4h": "4 часа",
-          "1d": "1 день", "2d": "2 дня", "3d": "3 дня", "7d": "7 дней",
-          "1w": "1 неделя"
-        };
-        const fullOption = optionMap[option] || option;
+        fullOption = postponeOptionMap[option] || option;
         const parsed = parseTimeSpec(fullOption);
         logger.info(`handleCallback: Парсинг подтверждения времени откладывания "${fullOption}": ${JSON.stringify(parsed)}`);
         if (!parsed.datetime) {
@@ -255,14 +316,14 @@ async function handleCallback(query) {
         reply_markup: { inline_keyboard: [] },
         parse_mode: "HTML"
       });
-      await bot.answerCallbackQuery(query.id, { text: `Напоминание отложено на ${option}` });
+      await bot.answerCallbackQuery(query.id, { text: `Напоминание отложено на ${fullOption}.` });
     } catch (err) {
       logger.error(`handleCallback: Ошибка обработки подтверждения postpone для reminder ${reminderId}: ${err.message}`);
       await bot.answerCallbackQuery(query.id, { text: 'Ошибка при откладывании напоминания.', show_alert: true });
     }
     return;
   }
-  
+
   if (data.startsWith("postpone_cancel|")) {
     await bot.answerCallbackQuery(query.id, { text: 'Отложение отменено.' });
     return;
@@ -281,11 +342,12 @@ async function buildUserPostponeKeyboard(userId, reminderId, forNotification = f
   if (!settings) {
     settings = new UserSettings({
       userId: userId.toString(),
-      postponeSettings: [...postponeOptions],
+      postponeSettings: ["5 мин", "10 мин", "15 мин", "30 мин", "1 час", "2 часа", "3 часа", "4 часа", "1 день", "2 дня", "3 дня", "7 дней", "1 неделя", "утро", "вечер"],
       selectedPostponeSettings: ["30 мин", "1 час", "3 часа", "утро", "вечер"]
     });
     await settings.save();
   }
+  // Используем выбранные опции или дефолтные
   const options = (settings.selectedPostponeSettings && settings.selectedPostponeSettings.length)
     ? settings.selectedPostponeSettings
     : ["30 мин", "1 час", "3 часа", "утро", "вечер"];
@@ -304,9 +366,9 @@ async function buildUserPostponeKeyboard(userId, reminderId, forNotification = f
   for (let i = 0; i < buttons.length; i += 3) {
     rows.push(buttons.slice(i, i + 3));
   }
-  // Если это уведомление, добавляем строку с кнопкой "Готово"
   if (forNotification) {
-    rows.push([{ text: "Готово", callback_data: `done|${reminderId}` }]);
+    // Для уведомлений – добавляем кнопку "Готово"
+    rows.push([{ text: "Готово", callback_data: `postpone_ok|${reminderId}` }]);
   }
   return { reply_markup: { inline_keyboard: rows } };
 }
@@ -320,10 +382,11 @@ async function sendOneOffReminder(reminder) {
     const sentMessage = await bot.sendMessage(reminder.userId, reminderText, inlineKeyboard);
     reminder.messageId = sentMessage.message_id;
     reminder.lastNotified = new Date();
-    reminder.postponedReminder = toMoscow(reminder.lastNotified, userTimezone).plus({ minutes: 3 }).toJSDate();
+    // Обновляем основное поле datetime вместо postponedReminder
+    reminder.datetime = toMoscow(reminder.lastNotified, userTimezone).plus({ minutes: 3 }).toJSDate();
     await reminder.save();
-    await scheduleReminder({ ...reminder.toObject(), datetime: reminder.postponedReminder });
-    logger.info(`sendOneOffReminder: Отправлено одноразовое уведомление для reminder ${reminder._id}, messageId: ${sentMessage.message_id}, инерционное запланировано на ${reminder.postponedReminder}`);
+    await scheduleReminder(reminder);
+    logger.info(`sendOneOffReminder: Отправлено одноразовое уведомление для reminder ${reminder._id}, messageId: ${sentMessage.message_id}, инерционное запланировано на ${reminder.datetime}`);
   } catch (err) {
     logger.error(`sendOneOffReminder: Ошибка отправки напоминания ${reminder._id}: ${err.message}`);
     if (err.message.includes('No document found')) {
@@ -344,7 +407,7 @@ async function sendReminder(reminderId) {
     const now = new Date();
     const userTimezone = getUserTimezone(reminder.userId);
     const nowInUserTimezone = toMoscow(now, userTimezone);
-    logger.info(`sendReminder: Проверка reminder ${reminderId}: datetime=${reminder.datetime}, postponedReminder=${reminder.postponedReminder}, lastNotified=${reminder.lastNotified}, now=${nowInUserTimezone.toISO()}`);
+    logger.info(`sendReminder: Проверка reminder ${reminderId}: datetime=${reminder.datetime}, lastNotified=${reminder.lastNotified}, now=${nowInUserTimezone.toISO()}`);
     
     if (reminder.lastProcessed && (new Date() - reminder.lastProcessed) < 1000) {
       logger.warn(`sendReminder: Дублирующийся вызов для reminder ${reminderId}, пропускаем.`);
@@ -356,12 +419,12 @@ async function sendReminder(reminderId) {
         logger.info(`sendReminder: Повторяющееся напоминание, вызываем sendPlannedReminderRepeated`);
         await sendPlannedReminderRepeated(reminder, reminder.nextReminder || reminder.datetime);
       }
-    } else if (reminder.postponedReminder && !reminder.completed && nowInUserTimezone.toJSDate() >= reminder.postponedReminder) {
-      logger.info(`sendReminder: Инерционное напоминание, вызываем processPostponed`);
-      await processPostponed(reminder);
     } else if (!reminder.lastNotified && !reminder.completed && (!reminder.datetime || nowInUserTimezone.toJSDate() >= reminder.datetime)) {
       logger.info(`sendReminder: Первое одноразовое напоминание, вызываем sendOneOffReminder`);
       await sendOneOffReminder(reminder);
+    } else if (reminder.datetime && !reminder.completed && nowInUserTimezone.toJSDate() >= reminder.datetime) {
+      logger.info(`sendReminder: Инерционное напоминание, вызываем processPostponed`);
+      await processPostponed(reminder);
     } else {
       logger.info(`sendReminder: Нет действий для reminder ${reminderId} на данный момент`);
     }
@@ -430,7 +493,7 @@ async function processPostponed(reminder, options = {}) {
   } catch (err) {
     logger.error(`processPostponed: Ошибка редактирования reminder ${reminder._id}, messageId: ${previousMessageId}: ${err.message}`);
   }
-  // Для уведомления добавляем клавиатуру с кнопками выбранных опций + кнопку "Готово"
+  // Формируем клавиатуру с выбранными опциями и кнопкой "Готово"
   const inlineKeyboard = await buildUserPostponeKeyboard(reminder.userId, reminder._id, true);
   const messageText = options.cycle
     ? `Отложенный повтор: ${reminder.description}\n🕒 ${displayTime}`
@@ -444,12 +507,13 @@ async function processPostponed(reminder, options = {}) {
       options.cycle.postponedReminder = newPostponed;
     } else {
       reminder.messageId = sent.message_id;
-      reminder.postponedReminder = newPostponed;
+      reminder.datetime = newPostponed;
       reminder.lastNotified = new Date();
+      reminder.postponedReminder = null;
     }
     await reminder.save();
-    await scheduleReminder({ ...reminder.toObject(), datetime: reminder.postponedReminder });
-    logger.info(`processPostponed: Инерционное напоминание для ${reminder._id} запланировано на ${reminder.postponedReminder}`);
+    await scheduleReminder(reminder);
+    logger.info(`processPostponed: Инерционное напоминание для ${reminder._id} запланировано на ${reminder.datetime}`);
   } catch (err) {
     logger.error(`processPostponed: Ошибка отправки нового сообщения для reminder ${reminder._id}: ${err.message}`);
     throw err;
