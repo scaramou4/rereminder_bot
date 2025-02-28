@@ -9,7 +9,7 @@ const cycleSchema = new mongoose.Schema({
 const reminderSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   description: { type: String, required: true },
-  datetime: { type: Date, required: true },
+  datetime: { type: Date }, // Убрано required: true
   repeat: { type: String, default: null },
   nextReminder: { type: Date, default: null },
   lastNotified: { type: Date, default: null },

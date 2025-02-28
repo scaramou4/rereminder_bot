@@ -31,8 +31,9 @@ async function createReminder(userId, description, datetime, repeat) {
     messageId: null,
     postponedReminder: null,
     completed: false,
-    lastProcessed: null,
-    postponedCount: 0
+    // Новые поля для инерционного цикла:
+    inertiaMessageId: null,
+    initialMessageEdited: false
   });
   await reminder.save();
   logger.info(`createReminder: Напоминание создано для user ${userId} на ${new Date(datetime)}`);
@@ -114,10 +115,18 @@ async function handleCallback(query) {
         await bot.sendMessage(chatId, 'Напоминание не найдено.');
         return;
       }
+      // Полностью очищаем все временные и повторяющиеся данные
       await cancelReminderJobs(reminderId);
       reminder.completed = true;
-      reminder.postponedReminder = null;
+      reminder.datetime = null;
+      reminder.repeat = null;
+      reminder.nextReminder = null;
+      reminder.lastNotified = null;
+      reminder.cycles = [];
       reminder.messageId = null;
+      reminder.postponedReminder = null;
+      reminder.inertiaMessageId = null;
+      reminder.initialMessageEdited = false;
       await reminder.save();
       await bot.editMessageText(`✅ Готово: ${reminder.description}`, {
         chat_id: chatId,
@@ -143,6 +152,17 @@ async function handleCallback(query) {
         return;
       }
       await cancelReminderJobs(reminderId);
+      reminder.completed = true;
+      reminder.datetime = null;
+      reminder.repeat = null;
+      reminder.nextReminder = null;
+      reminder.lastNotified = null;
+      reminder.cycles = [];
+      reminder.messageId = null;
+      reminder.postponedReminder = null;
+      reminder.inertiaMessageId = null;
+      reminder.initialMessageEdited = false;
+      await reminder.save();
       await bot.editMessageText(`✅ Готово: ${reminder.description}`, {
         chat_id: chatId,
         message_id: messageId,
@@ -368,7 +388,7 @@ async function buildUserPostponeKeyboard(userId, reminderId, forNotification = f
   }
   if (forNotification) {
     // Для уведомлений – добавляем кнопку "Готово"
-    rows.push([{ text: "Готово", callback_data: `postpone_ok|${reminderId}` }]);
+    rows.push([{ text: "Готово", callback_data: `done|${reminderId}` }]);
   }
   return { reply_markup: { inline_keyboard: rows } };
 }
@@ -411,6 +431,12 @@ async function sendReminder(reminderId) {
     
     if (reminder.lastProcessed && (new Date() - reminder.lastProcessed) < 1000) {
       logger.warn(`sendReminder: Дублирующийся вызов для reminder ${reminderId}, пропускаем.`);
+      return;
+    }
+
+    // Проверка состояния completed
+    if (reminder.completed) {
+      logger.info(`sendReminder: Напоминание ${reminderId} завершено, пропускаем обработку.`);
       return;
     }
 
