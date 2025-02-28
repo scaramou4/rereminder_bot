@@ -199,7 +199,7 @@ async function handleCallback(query) {
       "1w": "1 неделя",
       "am": "утро",
       "pm": "вечер",
-      "…": "…"
+      "custom": "…" // Обновлено для соответствия опции "…"
     };
     let fullOption; // переменная для полного текста опции
     try {
@@ -294,7 +294,7 @@ async function handleCallback(query) {
       "1w": "1 неделя",
       "am": "утро",
       "pm": "вечер",
-      "…": "…"
+      "custom": "…" // Обновлено для соответствия опции "…"
     };
     let fullOption;
     try {
@@ -362,7 +362,7 @@ async function buildUserPostponeKeyboard(userId, reminderId, forNotification = f
   if (!settings) {
     settings = new UserSettings({
       userId: userId.toString(),
-      postponeSettings: ["5 мин", "10 мин", "15 мин", "30 мин", "1 час", "2 часа", "3 часа", "4 часа", "1 день", "2 дня", "3 дня", "7 дней", "1 неделя", "утро", "вечер"],
+      postponeSettings: ["5 мин", "10 мин", "15 мин", "30 мин", "1 час", "2 часа", "3 часа", "4 часа", "1 день", "2 дня", "3 дня", "7 дней", "1 неделя", "утро", "вечер", "…"],
       selectedPostponeSettings: ["30 мин", "1 час", "3 часа", "утро", "вечер"]
     });
     await settings.save();
@@ -376,7 +376,7 @@ async function buildUserPostponeKeyboard(userId, reminderId, forNotification = f
     "1 час": "1h", "2 часа": "2h", "3 часа": "3h", "4 часа": "4h",
     "1 день": "1d", "2 дня": "2d", "3 дня": "3d", "7 дней": "7d",
     "1 неделя": "1w",
-    "утро": "am", "вечер": "pm", "…": "…"
+    "утро": "am", "вечер": "pm", "…": "custom"
   };
   const buttons = options.map(opt => ({
     text: opt,
@@ -442,7 +442,7 @@ async function sendReminder(reminderId) {
 
     if (reminder.repeat) {
       if (!reminder.nextReminder || nowInUserTimezone.toJSDate() >= reminder.nextReminder) {
-        logger.info(`sendReminder: Повторяющееся напоминание, вызываем sendPlannedReminderRepeated`);
+        logger.info(`sendReminder: Povторяющееся напоминание, вызываем sendPlannedReminderRepeated`);
         await sendPlannedReminderRepeated(reminder, reminder.nextReminder || reminder.datetime);
       }
     } else if (!reminder.lastNotified && !reminder.completed && (!reminder.datetime || nowInUserTimezone.toJSDate() >= reminder.datetime)) {
