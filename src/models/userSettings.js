@@ -10,7 +10,8 @@ const userSettingsSchema = new mongoose.Schema({
     type: [String], 
     default: ["30 мин", "1 час", "3 часа", "утро", "вечер"] 
   },
-  timezone: { type: String, default: 'Europe/Moscow' }
+  timezone: { type: String, default: 'Europe/Moscow' },
+  autoPostponeDelay: { type: Number, default: 15 } // Новое поле: автооткладывание (в минутах)
 });
 
 module.exports = mongoose.model('UserSettings', userSettingsSchema);
