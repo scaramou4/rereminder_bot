@@ -12,8 +12,7 @@ const bot = new TelegramBot(token, { polling: true });
 bot.setMyCommands([
   { command: '/start', description: 'Запуск бота и получение информации' },
   { command: '/list', description: 'Список активных уведомлений' },
-  { command: '/settings', description: 'Настройка различных параметров' },
-  { command: '/deleteall', description: 'Удаление всех уведомлений' },
+  { command: '/settings', description: 'Настройка различных параметров' }
 
 ])
   .then(() => {

@@ -196,4 +196,9 @@ bot.on('location', (msg) => {
   settings.handleLocation(msg);
 });
 
+bot.onText(/\/myid/, (msg) => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(chatId, `Ваш user ID: ${chatId}`);
+});
+
 logger.info('Бот запущен');
