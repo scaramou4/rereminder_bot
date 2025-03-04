@@ -69,11 +69,13 @@ bot.onText(/\/list/, async (msg) => {
   await listManager.sendPaginatedList(chatId, 0, false);
 });
 
+// Команда /deleteall теперь удаляет напоминания и связанные задачи Agenda
 bot.onText(/\/deleteall/, async (msg) => {
   const chatId = msg.chat.id;
   try {
     await deleteAllReminders(chatId);
-    bot.sendMessage(chatId, 'Все уведомления удалены.');
+    bot.sendMessage(chatId, 'Все уведомления и связанные задачи удалены.');
+    logger.info(`/deleteall: Удалены все напоминания для user ${chatId}`);
   } catch (error) {
     logger.error(`Ошибка удаления уведомлений: ${error.message}`);
     bot.sendMessage(chatId, 'Ошибка при удалении уведомлений.');
@@ -83,7 +85,7 @@ bot.onText(/\/deleteall/, async (msg) => {
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
 
-  // Проверяем, является ли сообщение текстовым
+  // Если сообщение не текстовое — пропускаем
   if (msg.text) {
     if (msg.text.startsWith('/')) return;
 
@@ -156,8 +158,7 @@ bot.on('message', async (msg) => {
     
     if (!parseResult.datetime) {
       if (parseResult.timeSpec && !parseResult.reminderText) {
-        // Обработка неполных запросов, таких как "через 5 минут" или "10 минут"
-        pendingRequests.pendingReminders[chatId] = { datetime: null, repeat: parseResult.repeat, timeSpec: parseResult.timeSpec };
+        pendingRequests.pendingReminders[chatId] = { datetime: parseResult.datetime, repeat: parseResult.repeat, timeSpec: parseResult.timeSpec };
         await bot.sendMessage(chatId, 'Пожалуйста, введите текст напоминания:');
         return;
       }

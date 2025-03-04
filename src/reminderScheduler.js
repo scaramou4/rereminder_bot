@@ -17,6 +17,10 @@ mongoose
   .then(() => logger.info('Подключение к MongoDB установлено'))
   .catch((error) => logger.error('Ошибка подключения к MongoDB: ' + error.message));
 
+function toMoscow(date, userTimezone = getUserTimezone()) {
+  return DateTime.fromJSDate(date).setZone(userTimezone);
+}
+
 async function createReminder(userId, description, datetime, repeat) {
   const reminder = new Reminder({
     userId,
@@ -65,23 +69,38 @@ async function listReminders(userId) {
   }
 }
 
+// Обновлённая функция удаления всех напоминаний:
+// Для каждого напоминания отменяются задачи Agenda, затем удаляются записи
 async function deleteAllReminders(userId) {
   try {
+    const reminders = await Reminder.find({ userId: userId.toString(), completed: false });
+    for (const reminder of reminders) {
+      await cancelReminderJobs(reminder._id);
+      logger.info(`deleteAllReminders: Отменены задачи для reminder ${reminder._id}`);
+    }
     await Reminder.deleteMany({ userId: userId.toString() });
-    await cancelReminderJobs({ 'data.userId': userId.toString() });
-    logger.info(`deleteAllReminders: Все напоминания для user ${userId} удалены.`);
+    logger.info(`deleteAllReminders: Все напоминания для user ${userId} удалены из базы.`);
   } catch (error) {
     logger.error(`deleteAllReminders: Ошибка удаления напоминаний для ${userId}: ${error.message}`);
+    throw error;
   }
 }
 
+// Обновлённая функция удаления одного напоминания: отмена задач и удаление записи
 async function deleteReminder(reminderId) {
   try {
-    const deleted = await Reminder.findByIdAndDelete(reminderId);
-    if (deleted) {
+    const reminder = await Reminder.findById(reminderId);
+    if (reminder) {
       await cancelReminderJobs(reminderId);
-      logger.info(`deleteReminder: Напоминание ${reminderId} удалено.`);
-      return deleted;
+      logger.info(`deleteReminder: Отменены задачи для reminder ${reminderId}`);
+      const deleted = await Reminder.findByIdAndDelete(reminderId);
+      if (deleted) {
+        logger.info(`deleteReminder: Напоминание ${reminderId} удалено.`);
+        return deleted;
+      } else {
+        logger.error(`deleteReminder: Напоминание ${reminderId} не найдено при удалении.`);
+        return null;
+      }
     } else {
       logger.error(`deleteReminder: Напоминание ${reminderId} не найдено.`);
       return null;
@@ -98,13 +117,11 @@ async function handleCallback(query) {
   const messageId = query.message.message_id;
   logger.info(`handleCallback: Получен callback с данными: ${data}`);
 
-  // Если callback для настроек
   if (data.startsWith('settings_')) {
     await handleSettingsCallback(query);
     return;
   }
 
-  // Обработка кнопки "Готово" под уведомлением
   if (data.startsWith('done|')) {
     const reminderId = data.split('|')[1];
     try {
@@ -139,7 +156,6 @@ async function handleCallback(query) {
     return;
   }
 
-  // Обработка кнопки "ОК" для откладывания под уведомлением
   if (data.startsWith('postpone_ok|')) {
     const reminderId = data.split('|')[1];
     try {
@@ -175,7 +191,6 @@ async function handleCallback(query) {
     return;
   }
 
-  // Обработка откладывания
   if (data.startsWith('postpone|')) {
     const parts = data.split('|');
     const option = parts[1];
@@ -349,11 +364,6 @@ async function handleCallback(query) {
   }
 }
 
-// Функция преобразования даты в заданную зону
-function toMoscow(date, userTimezone = getUserTimezone()) {
-  return DateTime.fromJSDate(date).setZone(userTimezone);
-}
-
 async function sendOneOffReminder(reminder) {
   const userTimezone = getUserTimezone(reminder.userId);
   const settings = await UserSettings.findOne({ userId: reminder.userId.toString() });
@@ -509,7 +519,7 @@ async function processPostponed(reminder, options = {}) {
   }
 }
 
-// Вызов defineSendReminderJob теперь производится после объявления всех функций, включая sendReminder.
+// Вызов defineSendReminderJob производится после объявления всех функций, включая sendReminder.
 defineSendReminderJob(sendReminder);
 
 module.exports = {
@@ -523,5 +533,6 @@ module.exports = {
   sendReminder,
   sendPlannedReminderRepeated,
   processPostponed,
-  buildUserPostponeKeyboard
+  buildUserPostponeKeyboard,
+  scheduleReminder
 };

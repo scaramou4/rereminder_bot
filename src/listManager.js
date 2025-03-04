@@ -2,7 +2,7 @@ const bot = require('./botInstance');
 const { listReminders, deleteReminder } = require('./reminderScheduler');
 const logger = require('./logger');
 const { DateTime } = require('luxon');
-const throttle = require('lodash/throttle'); // Установить через npm install lodash
+const throttle = require('lodash/throttle'); // Убедитесь, что установлен через npm install lodash
 
 async function renderList(chatId, page, deleteMode) {
   try {
@@ -85,7 +85,6 @@ async function sendPaginatedList(chatId, page, deleteMode, messageId = null) {
 }
 
 async function handleListCallback(query) {
-  // Ограничим вызов на 500 мс
   const throttledCallback = throttle(async (query) => {
     try {
       const data = query.data;
@@ -123,6 +122,7 @@ async function handleListCallback(query) {
         const deletedReminder = await deleteReminder(reminderId);
         if (deletedReminder) {
           await bot.sendMessage(chatId, `Напоминание "${deletedReminder.description}" удалено`);
+          logger.info(`handleListCallback: Удалено напоминание ${reminderId}`);
         } else {
           await bot.sendMessage(chatId, "Ошибка удаления уведомления");
         }

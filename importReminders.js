@@ -8,7 +8,7 @@ const mongoose = require('mongoose');
 const { DateTime } = require('luxon');
 
 // Импортируем функцию createReminder из reminderScheduler
-const { createReminder } = require('./src/reminderScheduler');
+const { createReminder, scheduleReminder } = require('./src/reminderScheduler');
 
 async function importReminders() {
   // Подключаемся к MongoDB
@@ -51,7 +51,9 @@ async function importReminders() {
             const description = row.description;
             const repeat = row.repeat && row.repeat.trim() !== '' ? row.repeat.trim() : null;
             console.log(`Creating reminder id ${row.id} with description: "${description}", repeat: ${repeat}`);
-            await createReminder(userId, description, dateObj, repeat);
+            const reminder = await createReminder(userId, description, dateObj, repeat);
+            // Сразу планируем задачу в Agenda
+            await scheduleReminder(reminder);
             console.log(`Imported reminder id ${row.id}`);
           } catch (err) {
             console.error(`Error importing reminder id ${row.id}: ${err.message}`);
