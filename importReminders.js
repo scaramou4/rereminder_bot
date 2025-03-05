@@ -7,7 +7,7 @@ const csv = require('csv-parser');
 const mongoose = require('mongoose');
 const { DateTime } = require('luxon');
 
-// Импортируем функцию createReminder из reminderScheduler
+// Импортируем функции из reminderScheduler
 const { createReminder, scheduleReminder } = require('./src/reminderScheduler');
 
 async function importReminders() {
@@ -21,7 +21,7 @@ async function importReminders() {
   // Задаем userId, от имени которого будут создаваться напоминания
   const userId = '1719436';
 
-  // Путь к CSV файлу (обновите путь, если необходимо)
+  // Путь к CSV файлу
   const filePath = path.join(__dirname, 'reminders.csv');
 
   const reminders = [];
@@ -48,8 +48,14 @@ async function importReminders() {
             }
             const dateObj = dt.toJSDate();
             console.log(`Parsed datetime for reminder id ${row.id}: ${dt.toISO()}`);
-            const description = row.description;
-            const repeat = row.repeat && row.repeat.trim() !== '' ? row.repeat.trim() : null;
+            let description = row.description;
+            // Если в CSV присутствует поле repeat, обрабатываем его:
+            let repeat = row.repeat && row.repeat.trim() !== '' ? row.repeat.trim() : null;
+            // Если repeat содержит фиксированную дату (например, "каждое 8 апреля в 09:00"),
+            // то преобразуем его в "1 год"
+            if (repeat && /^(каждое|каждый)\s+\d+\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)/i.test(repeat)) {
+              repeat = "1 год";
+            }
             console.log(`Creating reminder id ${row.id} with description: "${description}", repeat: ${repeat}`);
             const reminder = await createReminder(userId, description, dateObj, repeat);
             // Сразу планируем задачу в Agenda
@@ -59,8 +65,6 @@ async function importReminders() {
             console.error(`Error importing reminder id ${row.id}: ${err.message}`);
           }
         }
-        console.log('Import finished.');
-        resolve();
       })
       .on('error', (err) => {
         console.error("Error reading CSV:", err);
