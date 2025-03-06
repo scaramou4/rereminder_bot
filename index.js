@@ -101,7 +101,7 @@ bot.on('message', async (msg) => {
       await scheduleReminder(reminder);
       const eventDate = reminder.repeat ? (reminder.nextReminder || reminder.datetime) : reminder.datetime;
       const formattedDate = DateTime.fromJSDate(eventDate).setZone('Europe/Moscow').setLocale('ru').toFormat('HH:mm, d MMMM yyyy');
-      const confirmationText = `✅ Напоминание сохранено:\n\n📌 ${description}\n🕒 ${formattedDate}\n🔁 Повтор: ${formatRepeatPhrase(pending.repeat)}`;
+      const confirmationText = `Напоминание сохранено:\n\n📌 ${description}\n🕒 ${formattedDate}\n🔁 Повтор: ${formatRepeatPhrase(pending.repeat)}`;
       await bot.sendMessage(chatId, confirmationText);
       return;
     }
@@ -176,7 +176,7 @@ bot.on('message', async (msg) => {
     await scheduleReminder(reminder);
     const eventDate = reminder.repeat ? (reminder.nextReminder || reminder.datetime) : reminder.datetime;
     const formattedDate = DateTime.fromJSDate(eventDate).setZone('Europe/Moscow').setLocale('ru').toFormat('HH:mm, d MMMM yyyy');
-    const confirmationText = `✅ Напоминание сохранено:\n\n📌 ${parseResult.reminderText}\n🕒 ${formattedDate}\n🔁 Повтор: ${formatRepeatPhrase(parseResult.repeat)}`;
+    const confirmationText = `Напоминание сохранено:\n\n📌 ${parseResult.reminderText}\n🕒 ${formattedDate}\n🔁 Повтор: ${formatRepeatPhrase(parseResult.repeat)}`;
     await bot.sendMessage(chatId, confirmationText);
   } else {
     logger.info(`index: Получено не текстовое сообщение от user ${chatId}: ${JSON.stringify(msg)}`);
