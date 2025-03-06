@@ -136,3 +136,13 @@ yarn-debug.log*
 yarn-error.log*
 .env
 .DS_Store
+reminders.json
+importFromJson.js
+.gitignore
+exportCollection.js
+allJobsAgenda.js
+.gitignore
+.gitignore
+.gitignore
+exportedReminders.json
+agendaJobs.json
