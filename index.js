@@ -1,14 +1,14 @@
+// index.js
 require('dotenv').config();
 
 const bot = require('./src/botInstance');
-const { parseReminder } = require('./src/dateParser');
 const { createReminder, sendReminder, deleteAllReminders, Reminder, handleCallback } = require('./src/reminderScheduler');
 const listManager = require('./src/listManager');
 const timeSpecParser = require('./src/timeSpecParser');
 const pendingRequests = require('./src/pendingRequests');
 const logger = require('./src/logger');
 const { DateTime } = require('luxon');
-const { agenda, scheduleReminder } = require('./src/agendaScheduler');
+const { agenda } = require('./src/agendaScheduler'); // Убрал scheduleReminder из импорта
 const settings = require('./src/settings');
 
 // Запуск Agenda
@@ -19,44 +19,25 @@ const settings = require('./src/settings');
 
 function formatRepeatPhrase(repeat) {
   if (!repeat) return 'нет';
-  const feminineAccusativeMap = {
-    'минута': 'минуту',
-    'неделя': 'неделю',
-    'среда': 'среду',
-    'пятница': 'пятница',
-    'суббота': 'субботу'
-  };
-  const neutral = ['воскресенье'];
-  const parts = repeat.split(' ');
-  if (parts.length === 1) {
-    let unit = parts[0];
-    if (feminineAccusativeMap[unit]) {
-      return `каждую ${feminineAccusativeMap[unit]}`;
-    } else if (neutral.includes(unit)) {
-      return `каждое ${unit}`;
-    } else {
-      return `каждый ${unit}`;
-    }
-  } else {
-    const multiplier = parts[0];
-    const unit = parts.slice(1).join(' ');
-    return `каждые ${multiplier} ${unit}`;
+  if (repeat.match(/^кажд(ый|ая|ую|ое|ые)\s+/)) {
+    return repeat;
   }
+  const parts = repeat.trim().split(' ');
+  let multiplier = parseInt(parts[0], 10);
+  let unit = isNaN(multiplier) ? parts[0] : parts[1];
+  const feminineAccusativeMap = { 'минута': 'минуту', 'неделя': 'неделю', 'среда': 'среду', 'пятница': 'пятницу', 'суббота': 'субботу' };
+  const neutral = ['воскресенье'];
+  const masculine = ['понедельник', 'вторник', 'четверг', 'час', 'день', 'месяц', 'год'];
+  return multiplier === 1 ? (feminineAccusativeMap[unit] ? `каждую ${feminineAccusativeMap[unit]}` : neutral.includes(unit) ? `каждое ${unit}` : masculine.includes(unit) ? `каждый ${unit}` : `каждый ${unit}`) : `каждые ${multiplier} ${unit}`;
 }
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error(`Unhandled Rejection at: ${promise}, reason: ${reason}`);
+});
 
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  const welcomeMessage = `Привет! Я бот-напоминалка.
-  
-Ты можешь создавать напоминания, просто отправляя сообщение в формате:
-"через 10 минут купить молоко"
-
-Доступные команды:
-/start - информация
-/list - список уведомлений
-/deleteall - удалить все уведомления
-/settings - настройки бота`;
-  bot.sendMessage(chatId, welcomeMessage);
+  bot.sendMessage(chatId, `Привет! Я бот-напоминалка.\nТы можешь создавать напоминания, просто отправляя сообщение в формате:\n"через 10 минут купить молоко"\n\nДоступные команды:\n/start - информация\n/list - список уведомлений\n/deleteall - удалить все уведомления\n/settings - настройки бота`);
 });
 
 bot.onText(/\/settings/, (msg) => {
@@ -66,10 +47,14 @@ bot.onText(/\/settings/, (msg) => {
 
 bot.onText(/\/list/, async (msg) => {
   const chatId = msg.chat.id;
-  await listManager.sendPaginatedList(chatId, 0, false);
+  try {
+    await listManager.sendPaginatedList(chatId, 0, false);
+  } catch (error) {
+    logger.error(`Ошибка при выполнении /list для user ${chatId}: ${error.message}`);
+    bot.sendMessage(chatId, 'Ошибка при получении списка уведомлений.');
+  }
 });
 
-// Команда /deleteall теперь удаляет напоминания и связанные задачи Agenda
 bot.onText(/\/deleteall/, async (msg) => {
   const chatId = msg.chat.id;
   try {
@@ -84,122 +69,49 @@ bot.onText(/\/deleteall/, async (msg) => {
 
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
-
-  // Если сообщение не текстовое — пропускаем
-  if (msg.text) {
-    if (msg.text.startsWith('/')) return;
-
-    if (pendingRequests.pendingReminders[chatId]) {
-      const pending = pendingRequests.pendingReminders[chatId];
-      const description = msg.text.trim();
-      if (!description) {
-        await bot.sendMessage(chatId, 'Пожалуйста, введите текст напоминания (не может быть пустым):');
-        return;
+  const userId = msg.from.id;
+  if (msg.text && !msg.text.startsWith('/')) {
+    try {
+      const textNormalized = msg.text.replace(/ё/g, 'е').replace(/Ё/g, 'Е');
+      logger.info(`Получено сообщение от user ${chatId}: "${textNormalized}"`);
+      const reminder = await createReminder(userId, textNormalized, chatId);
+      if (reminder) {
+        const eventDate = reminder.repeat ? (reminder.nextReminder || reminder.datetime) : reminder.datetime;
+        const userSettings = await require('./src/models/userSettings').findOne({ userId: chatId.toString() }) || { timezone: 'Europe/Moscow' };
+        const formattedDate = DateTime.fromJSDate(eventDate).setZone(userSettings.timezone).setLocale('ru').toFormat('HH:mm, d MMMM yyyy');
+        bot.sendMessage(chatId, `Напоминание сохранено:\n📌 ${reminder.description}\n🕒 ${formattedDate}\n🔁 Повтор: ${formatRepeatPhrase(reminder.repeat)}`);
+      } else {
+        logger.warn(`Создание напоминания для user ${userId} не удалось. Текст: "${textNormalized}"`);
+        // Не отправляем сообщение, так как оно уже отправлено в createReminder
       }
-      delete pendingRequests.pendingReminders[chatId];
-      const reminder = await createReminder(chatId, description, pending.datetime, pending.repeat);
-      await scheduleReminder(reminder);
-      const eventDate = reminder.repeat ? (reminder.nextReminder || reminder.datetime) : reminder.datetime;
-      const formattedDate = DateTime.fromJSDate(eventDate).setZone('Europe/Moscow').setLocale('ru').toFormat('HH:mm, d MMMM yyyy');
-      const confirmationText = `Напоминание сохранено:\n\n📌 ${description}\n🕒 ${formattedDate}\n🔁 Повтор: ${formatRepeatPhrase(pending.repeat)}`;
-      await bot.sendMessage(chatId, confirmationText);
-      return;
+    } catch (error) {
+      logger.error(`Ошибка обработки сообщения от user ${userId}: ${error.message}. Текст: "${msg.text}"`);
+      bot.sendMessage(chatId, '❌ Произошла ошибка при обработке вашего запроса. Попробуйте ещё раз.');
     }
-    
-    if (pendingRequests.pendingPostpone[chatId]) {
-      const { reminderId, messageId } = pendingRequests.pendingPostpone[chatId];
-      delete pendingRequests.pendingPostpone[chatId];
-      const parsed = timeSpecParser.parseTimeSpec(msg.text);
-      if (!parsed.datetime) {
-        await bot.sendMessage(chatId, "Сорри, не смог распознать. Попробуйте в формате, например, '10 минут', '5 мин', 'завтра в 10' или 'сегодня в 17'.");
-        return;
-      }
-      const newDateTime = parsed.datetime;
-      const reminder = await Reminder.findById(reminderId);
-      if (!reminder) {
-        await bot.sendMessage(chatId, 'Напоминание не найдено.');
-        return;
-      }
-      reminder.datetime = newDateTime;
-      reminder.messageIds = [];
-      await reminder.save();
-      const formattedNewTime = DateTime.fromJSDate(newDateTime).toFormat('HH:mm');
-      await bot.editMessageText(`🔔 Отложено: ${reminder.description}`, { 
-        chat_id: chatId, 
-        message_id: messageId, 
-        reply_markup: { inline_keyboard: [] }, 
-        parse_mode: "HTML" 
-      });
-      await bot.sendMessage(chatId, `🔔 Повторно: ${reminder.description}\n🕒 Новое время: ${formattedNewTime}`, { parse_mode: "HTML" });
-      await scheduleReminder(reminder);
-      return;
-    }
-
-    const textNormalized = msg.text.replace(/ё/g, 'е').replace(/Ё/g, 'Е');
-    logger.info(`Получено сообщение от user ${chatId}: "${textNormalized}"`);
-    const parseResult = parseReminder(textNormalized);
-    logger.info(`Результат парсинга: ${JSON.stringify(parseResult)}`);
-    if (parseResult.error) {
-      let errorMessage = "Сорри, не смог распознать. Попробуйте в формате, например, 'в 17 ужин', 'в 1015 уборка', 'сегодня в 17 тест', 'завтра в 17 ужин' или 'через 10 минут тест'.";
-      if (parseResult.error === 'Некорректный месяц') {
-        errorMessage = "Сорри, не смог распознать месяц. Используйте, например, 'января', 'февраля', 'марта' и т.д.";
-      } else if (parseResult.error === 'Недопустимое время (часы должны быть 0–23, минуты 0–59)') {
-        errorMessage = "Сорри, время должно быть в формате 0–23 часов и 0–59 минут. Исправьте, пожалуйста.";
-      } else if (parseResult.error === 'Длительность должна быть положительной') {
-        errorMessage = "Сорри, длительность должна быть положительным числом. Исправьте, пожалуйста.";
-      } else if (parseResult.error === 'Недопустимая единица повторения') {
-        errorMessage = "Сорри, недопустимая единица повторения. Используйте 'минута', 'час', 'день', 'неделя', 'месяц' или 'год'.";
-      } else if (parseResult.error === 'Недопустимый день недели') {
-        errorMessage = "Сорри, недопустимый день недели. Используйте 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота' или 'воскресенье'.";
-      }
-      await bot.sendMessage(chatId, errorMessage);
-      return;
-    }
-    
-    if (!parseResult.datetime) {
-      if (parseResult.timeSpec && !parseResult.reminderText) {
-        pendingRequests.pendingReminders[chatId] = { datetime: parseResult.datetime, repeat: parseResult.repeat, timeSpec: parseResult.timeSpec };
-        await bot.sendMessage(chatId, 'Пожалуйста, введите текст напоминания:');
-        return;
-      }
-      await bot.sendMessage(chatId, "Сорри, не смог распознать. Попробуйте в формате, например, 'в 17 ужин', 'в 1015 уборка', 'сегодня в 17 тест', 'завтра в 17 ужин' или 'через 10 минут тест'.");
-      return;
-    }
-    
-    if (parseResult.datetime && !parseResult.reminderText) {
-      pendingRequests.pendingReminders[chatId] = { datetime: parseResult.datetime, repeat: parseResult.repeat };
-      await bot.sendMessage(chatId, 'Пожалуйста, введите текст напоминания:');
-      return;
-    }
-    
-    const reminder = await createReminder(chatId, parseResult.reminderText, parseResult.datetime, parseResult.repeat);
-    await scheduleReminder(reminder);
-    const eventDate = reminder.repeat ? (reminder.nextReminder || reminder.datetime) : reminder.datetime;
-    const formattedDate = DateTime.fromJSDate(eventDate).setZone('Europe/Moscow').setLocale('ru').toFormat('HH:mm, d MMMM yyyy');
-    const confirmationText = `Напоминание сохранено:\n\n📌 ${parseResult.reminderText}\n🕒 ${formattedDate}\n🔁 Повтор: ${formatRepeatPhrase(parseResult.repeat)}`;
-    await bot.sendMessage(chatId, confirmationText);
+  } else if (msg.text) {
+    logger.info(`Получена команда от user ${chatId}: ${msg.text}`);
   } else {
-    logger.info(`index: Получено не текстовое сообщение от user ${chatId}: ${JSON.stringify(msg)}`);
+    logger.info(`Получено не текстовое сообщение от user ${chatId}: ${JSON.stringify(msg)}`);
   }
 });
 
 bot.on('callback_query', async (query) => {
-  if (query.data.startsWith("list_")) {
-    await listManager.handleListCallback(query);
-  } else if (query.data.startsWith("settings_")) {
-    await settings.handleSettingsCallback(query);
-  } else {
-    await handleCallback(query);
+  try {
+    if (query.data.startsWith('list_')) {
+      await listManager.handleListCallback(query);
+    } else if (query.data.startsWith('settings_')) {
+      await settings.handleSettingsCallback(query);
+    } else {
+      await handleCallback(query);
+    }
+  } catch (error) {
+    logger.error(`Ошибка обработки callback от user ${query.from.id}: ${error.message}`);
+    bot.answerCallbackQuery(query.id, { text: 'Ошибка при обработке запроса.', show_alert: true });
   }
 });
 
 bot.on('location', (msg) => {
   settings.handleLocation(msg);
-});
-
-bot.onText(/\/myid/, (msg) => {
-  const chatId = msg.chat.id;
-  bot.sendMessage(chatId, `Ваш user ID: ${chatId}`);
 });
 
 logger.info('Бот запущен');

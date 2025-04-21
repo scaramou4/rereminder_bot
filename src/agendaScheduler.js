@@ -31,11 +31,17 @@ function defineSendReminderJob(sendReminder) {
   });
 }
 
+// В agendaScheduler.js
 async function scheduleReminder(reminder) {
-  const jobName = 'sendReminder';
+  if (!reminder || !reminder.datetime) {
+    logger.warn(`scheduleReminder: Напоминание или дата отсутствуют, пропускаем. Reminder: ${reminder ? reminder._id : 'null'}`);
+    return;
+  }
+
   const when = reminder.datetime;
-  logger.info(`scheduleReminder: Запланировано напоминание ${reminder._id} (${jobName}) на ${when}.`);
-  await agenda.schedule(when, jobName, { reminderId: reminder._id });
+  const job = agenda.create('send reminder', { reminderId: reminder._id.toString() });
+  await job.schedule(when).save();
+  logger.info(`scheduleReminder: Напоминание ${reminder._id} запланировано на ${when}`);
 }
 
 async function cancelReminderJobs(reminderId) {

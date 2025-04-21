@@ -21,13 +21,19 @@ async function renderList(chatId, page, deleteMode) {
     let text = `Ваши предстоящие уведомления:\n\n`;
     pageReminders.forEach((reminder, idx) => {
       const num = startIndex + idx + 1;
-      const formattedTime = DateTime.fromJSDate(reminder.nextEvent)
-        .setZone('Europe/Moscow')
-        .setLocale('ru')
-        .toFormat("HH:mm, d MMMM yyyy");
+      let formattedTime;
+      try {
+        formattedTime = DateTime.fromJSDate(reminder.nextEvent)
+          .setZone('Europe/Moscow')
+          .setLocale('ru')
+          .toFormat("HH:mm, d MMMM yyyy");
+      } catch (e) {
+        logger.warn(`Некорректное значение nextEvent для reminder ${reminder._id}: ${e.message}`);
+        formattedTime = 'Не определено';
+      }
       text += `<b>${num}. Напоминание: ${reminder.description}</b>\n`;
       text += `Следующее событие: ${formattedTime}\n`;
-      text += `Повтор: ${reminder.repeat ? (reminder.repeat === 'неделя' ? 'каждую неделю' : `каждый ${reminder.repeat}`) : 'нет'}\n\n`;
+      text += `Повтор: ${reminder.repeat ? reminder.repeat : 'нет'}\n\n`;
     });
     text += `Страница ${page + 1} из ${totalPages}`;
     
@@ -46,11 +52,11 @@ async function renderList(chatId, page, deleteMode) {
       let rows = [];
       let row = [];
       pageReminders.forEach((reminder, idx) => {
-         row.push({ text: `${startIndex + idx + 1}`, callback_data: `list_delete|${reminder._id}|${page}` });
-         if (row.length === 5) {
-           rows.push(row);
-           row = [];
-         }
+        row.push({ text: `${startIndex + idx + 1}`, callback_data: `list_delete|${reminder._id}|${page}` });
+        if (row.length === 5) {
+          rows.push(row);
+          row = [];
+        }
       });
       if (row.length > 0) rows.push(row);
       rows.push([{ text: "Отмена", callback_data: `list_cancel|${page}` }]);

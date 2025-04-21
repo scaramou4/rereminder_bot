@@ -1,89 +1,51 @@
+// dateParser.js
 const { DateTime } = require('luxon');
 const logger = require('./logger');
+const UserSettings = require('./models/userSettings');
+const {
+  MOSCOW_ZONE,
+  monthNames,
+  regexps,
+  errorMessages,
+  timeUnitMap,
+  dayOfWeekMap,
+  fuzzyCorrections,
+  unitDeclensions
+} = require('./constants');
 
-const MOSCOW_ZONE = 'Europe/Moscow';
-
-const timeUnitNormalization = {
-  'месяц': ['месяц', 'месяца', 'месяцев'],
-  'неделя': ['неделя', 'недели', 'недель', 'неделю'],
-  'год': ['год', 'года', 'лет'],
-  'час': ['час', 'часа', 'часов', 'часу'],
-  'день': ['день', 'дня', 'дней', 'дню']
-};
-
-const timeUnitMap = {};
-Object.entries(timeUnitNormalization).forEach(([nominative, forms]) => {
-  forms.forEach(form => {
-    timeUnitMap[form.toLowerCase()] = nominative;
-  });
-});
-
-const dayOfWeekNormalization = {
-  'понедельник': ['понедельник', 'понедельника', 'понедельнику', 'понедельником', 'понедельнике'],
-  'вторник': ['вторник', 'вторника', 'вторнику', 'вторником', 'вторнике'],
-  'среда': ['среда', 'среды', 'среду', 'средой', 'среде'],
-  'четверг': ['четверг', 'четверга', 'четвергу', 'четвергом', 'четверге'],
-  'пятница': ['пятница', 'пятницы', 'пятницу', 'пятницей', 'пятнице'],
-  'суббота': ['суббота', 'субботы', 'субботу', 'субботой', 'субботе'],
-  'воскресенье': ['воскресенье', 'воскресенья', 'воскресенью', 'воскресеньем', 'воскресенье']
-};
-
-const dayOfWeekMap = {};
-Object.entries(dayOfWeekNormalization).forEach(([nominative, forms]) => {
-  forms.forEach(form => {
-    dayOfWeekMap[form.toLowerCase()] = nominative;
-  });
-});
-
-const dayNameToWeekday = {
-  'понедельник': 1,
-  'вторник': 2,
-  'среда': 3,
-  'четверг': 4,
-  'пятница': 5,
-  'суббота': 6,
-  'воскресенье': 7
-};
-
-const fuzzyCorrections = {
-  'миут': 'минута',
-  'миют': 'минута',
-  'миу': 'минута',
-  'полсезавтра': 'послезавтра',
-  'неделы': 'неделя',
-  'кажый': 'каждый',
-  'воксресенье': 'воскресенье'
-};
-
-const monthNames = {
-  'январь': 1, 'января': 1, 'январе': 1,
-  'февраль': 2, 'февраля': 2, 'феврале': 2,
-  'март': 3, 'марта': 3, 'марте': 3,
-  'апрель': 4, 'апреля': 4, 'апреле': 4,
-  'май': 5, 'мая': 5, 'мае': 5,
-  'июнь': 6, 'июня': 6, 'июне': 6,
-  'июль': 7, 'июля': 7, 'июле': 7,
-  'август': 8, 'августа': 8, 'августе': 8,
-  'сентябрь': 9, 'сентября': 9, 'сентябре': 9,
-  'октябрь': 10, 'октября': 10, 'октябре': 10,
-  'ноябрь': 11, 'ноября': 11, 'ноябре': 11,
-  'декабрь': 12, 'декабря': 12, 'декабре': 12
-};
-
+/**
+ * Корректирует «неточные» значения (опечатки).
+ */
 function fuzzyCorrectUnit(word) {
   const lower = word.toLowerCase();
   return fuzzyCorrections[lower] || word;
 }
 
-const unitDeclensions = {
-  'минута': { one: 'минута', few: 'минуты', many: 'минут' },
-  'час': { one: 'час', few: 'часа', many: 'часов' },
-  'день': { one: 'день', few: 'дня', many: 'дней' },
-  'неделя': { one: 'неделя', few: 'недели', many: 'недель' },
-  'месяц': { one: 'месяц', few: 'месяца', many: 'месяцев' },
-  'год': { one: 'год', few: 'года', many: 'лет' }
-};
+/**
+ * Нормализует слово (например, "среду" → "среда").
+ */
+function normalizeWord(word) {
+  const lowerWord = word.toLowerCase();
+  logger.info(`normalizeWord: Нормализация слова: "${lowerWord}"`);
+  if (timeUnitMap[lowerWord]) return timeUnitMap[lowerWord];
+  if (dayOfWeekMap[lowerWord]) return dayOfWeekMap[lowerWord];
+  const errorForms = {
+    'среду': 'среда',
+    'пятницу': 'пятница',
+    'понедельника': 'понедельник',
+    'вторника': 'вторник',
+    'четверга': 'четверг',
+    'субботы': 'суббота',
+    'воскресенья': 'воскресенье'
+  };
+  const normalized = errorForms[lowerWord] || fuzzyCorrectUnit(word);
+  logger.info(`normalizeWord: Нормализованное слово: "${normalized}"`);
+  return normalized;
+}
 
+/**
+ * Склоняет единицу времени по числу.
+ */
 function getDeclension(unit, number) {
   const forms = unitDeclensions[unit];
   if (!forms) return unit;
@@ -99,10 +61,14 @@ function getDeclension(unit, number) {
   }
 }
 
+/**
+ * Преобразует повторение в строку для расписания (не используется напрямую).
+ */
 function transformRepeatToAgenda(russianRepeat) {
+  let repeatStr = russianRepeat.replace(/кажд(ый|ая|ую|ое|ые)\s*/, '');
   let multiplier = 1;
-  let unit = russianRepeat.trim();
-  const parts = russianRepeat.trim().split(" ");
+  let unit = repeatStr.trim();
+  const parts = repeatStr.trim().split(" ");
   if (parts.length === 2) {
     multiplier = parseInt(parts[0], 10);
     unit = parts[1];
@@ -113,308 +79,351 @@ function transformRepeatToAgenda(russianRepeat) {
     return multiplier > 1 ? `${multiplier} weeks` : "1 week";
   }
   const mapping = {
-    'минута': 'minute',
-    'час': 'hour',
-    'день': 'day',
-    'неделя': 'week',
-    'месяц': 'month',
-    'год': 'year'
+    'минута': 'minutes',
+    'час': 'hours',
+    'день': 'days',
+    'неделя': 'weeks',
+    'месяц': 'months',
+    'год': 'years'
   };
   const englishUnit = mapping[unit] || unit;
   return multiplier > 1 ? `${multiplier} ${englishUnit}s` : `${multiplier} ${englishUnit}`;
 }
 
-// Регулярные выражения
-const absoluteDateRegex = /^(\d{1,2})\s+([а-яё]+)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/i;
-// Исправленное регулярное выражение для дней недели
-const absoluteWeekdayRegex = /^(?:в(?:о)?\s+)?(\d{1,2}(?::|\.)?(\d{1,2})?)?\s*(?:в\s+)?(понедельник[ауи]?|вторник[ауи]?|сред[ауы]|четверг[ауи]?|пятниц[ауы]|суббот[ауы]|воскресень[еи])(?:\s+в\s+(\d{1,2}(?::|\.)?\d{1,2}|\d{3,4}))?\s+(.+)$/i;
-const repeatRegex = /^кажд(?:ый|ая|ую|ое|ые)(?:\s+(\d+))?\s+([А-Яа-яёЁ]+)(?:\s+в\s+(\d{1,2}(?::|\.)?(\d{1,2})?|\d{3,4}))?\s+(.+)?$/iu;
-const throughRegex = /^через\s+(?:(\d+(?:\.\d+)?)\s+)?([A-Za-zА-Яа-яёЁ]+)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s*(.+)?$/i;
-const todayTomorrowRegex = /^(сегодня|завтра|послезавтра)(?:\s+в\s+(\d{1,2})(?::(\d{1,2}))?)?\s+(.+)/i;
-const timeWithDotRegex = /^в\s*(\d{1,2})[.](\d{1,2})\s+(.+)/i;
-const timeNumericRegex = /^в\s*(\d{3,4}|\d{1,2}(?::|\.)?\d{2})\s+(?:(кажд(?:ый|ая|ую|ое|ые)(?:\s+(\d+))?\s+([А-Яа-яёЁ]+)(?:\s+(.+))?)|(.+))$/i;
-const timeWithSpaceRegex = /^в\s*(\d{1,2})\s+(\d{1,2})\s+(.+)/i;
-const simpleTimeRegex = /^в\s*(\d{1,2})\s+(.+)/i;
-
-function normalizeWord(word) {
-  const lowerWord = word.toLowerCase();
-  logger.info(`normalizeWord: Нормализация слова: ${lowerWord}`);
-  if (timeUnitMap[lowerWord]) return timeUnitMap[lowerWord];
-  if (dayOfWeekMap[lowerWord]) return dayOfWeekMap[lowerWord];
-  const errorForms = {
-    'среду': 'среда',
-    'пятницу': 'пятница',
-    'понедельника': 'понедельник',
-    'вторника': 'вторник',
-    'четверга': 'четверг',
-    'субботы': 'суббота',
-    'воскресенья': 'воскресенье'
-  };
-  const normalized = errorForms[lowerWord] || word;
-  logger.info(`normalizeWord: Нормализованное слово: ${normalized}`);
-  return normalized;
+/**
+ * Парсит строку времени (например, "10:15" или "1015") и возвращает объект { hour, minute }.
+ */
+function parseTimeString(timeStr) {
+  let hour, minute;
+  if (!timeStr) return { hour: 0, minute: 0 };
+  if (timeStr.length === 3 || timeStr.length === 4) {
+    hour = parseInt(timeStr.slice(0, timeStr.length === 3 ? 1 : 2), 10) || 0;
+    minute = parseInt(timeStr.slice(timeStr.length === 3 ? 1 : 2), 10) || 0;
+  } else if (timeStr.includes(':') || timeStr.includes('.')) {
+    const [h, m] = timeStr.split(/[:.]/);
+    hour = parseInt(h, 10) || 0;
+    minute = parseInt(m, 10) || 0;
+  } else {
+    hour = parseInt(timeStr, 10) || 0;
+    minute = 0;
+  }
+  return { hour, minute };
 }
 
+/**
+ * Временно просто возвращает исходный текст.
+ */
 function normalizeTimeExpressions(text) {
-  const regex = new RegExp(`\\b(${Object.keys(timeUnitMap).concat(Object.keys(dayOfWeekMap)).join('|')})\\b`, 'gi');
-  logger.info(`normalizeTimeExpressions: Исходный текст: ${text}`);
-  const normalized = text.replace(regex, (match) => normalizeWord(match));
-  logger.info(`normalizeTimeExpressions: Нормализованный текст: ${normalized}`);
-  return normalized;
+  return text;
 }
 
+/**
+ * Парсит дату по заданному формату.
+ */
 function parseDate(text, format) {
   const normalizedText = normalizeTimeExpressions(text);
-  logger.info(`parseDate: Парсинг текста: ${normalizedText}, формат: ${format}`);
+  logger.info(`parseDate: Парсинг текста: "${normalizedText}" с форматом: "${format}"`);
   return DateTime.fromFormat(normalizedText, format, { locale: 'ru' });
 }
 
-function computeNextTimeFromScheduled(scheduledTime, repeat) {
+/**
+ * Вычисляет следующее время для запланированного события.
+ */
+function computeNextTimeFromScheduled(scheduledTime, repeat, userZone) {
   const dt = DateTime.fromJSDate(scheduledTime, { zone: MOSCOW_ZONE });
-  if (repeat in dayNameToWeekday) {
-    return dt.plus({ weeks: 1 }).toJSDate();
+  if (repeat && repeat.includes('час')) {
+    return dt.plus({ hours: 1 }).setZone(userZone).toJSDate();
   }
-  const match = repeat.match(/^(\d+)?\s*(минут(?:а|ы|у)|час(?:а|ов|у)?|день(?:я|ей)?|неделя(?:я|и|ю)?|месяц(?:а|ев)?|год(?:а|ов)?)/i);
-  let multiplier = 1;
-  let unit = repeat;
-  if (match) {
-    if (match[1]) multiplier = parseInt(match[1], 10);
-    unit = fuzzyCorrectUnit(match[2]).toLowerCase();
-    unit = normalizeWord(unit);
-  }
-  
-  if (unit.match(/^минут/)) {
-    return dt.plus({ minutes: multiplier }).toJSDate();
-  } else if (unit.match(/^час/)) {
-    return dt.plus({ hours: multiplier }).toJSDate();
-  } else if (unit.match(/^день/)) {
-    return dt.plus({ days: multiplier }).toJSDate();
-  } else if (unit.match(/^неделя/)) {
-    return dt.plus({ weeks: multiplier }).toJSDate();
-  } else if (unit.match(/^месяц/)) {
-    return dt.plus({ months: multiplier }).toJSDate();
-  } else if (unit.match(/^год/)) {
-    return dt.plus({ years: multiplier }).toJSDate();
-  } else {
-    return dt.plus({ days: 1 }).toJSDate();
-  }
+  return dt.plus({ days: 1 }).setZone(userZone).toJSDate();
 }
 
-function parseReminder(text) {
-  logger.info(`parseReminder: Входной текст: ${text}`);
+/**
+ * Основная функция парсинга напоминания.
+ * Возвращает объект: { error, datetime, reminderText, timeSpec, repeat }.
+ */
+async function parseReminder(text, chatId) {
+  logger.info(`parseReminder: Входной текст: "${text}"`);
   const normalizedText = normalizeTimeExpressions(text);
+  logger.info(`normalizeTimeExpressions: Нормализованный текст: "${normalizedText}"`);
   const now = DateTime.now().setZone(MOSCOW_ZONE, { keepLocalTime: true });
-  
+  const {
+    absoluteDateRegex,
+    monthlyDayRegex,
+    repeatRegex,
+    throughRegex,
+    todayTomorrowRegex,
+    timeWithDotRegex,
+    timeNumericRegex,
+    timeWithSpaceRegex,
+    simpleTimeRegex,
+    dayMorningEveningRegex,
+    morningEveningRegex
+  } = regexps;
+
   try {
-    // 0. Абсолютная дата: "25 февраля в 10 тест"
-    let match = normalizedText.match(absoluteDateRegex);
+    // 0. Формат "сегодня/завтра/послезавтра + утром/вечером"
+    let match = normalizedText.match(dayMorningEveningRegex);
     if (match) {
-      logger.info(`parseReminder: Совпадение с абсолютной датой: ${match}`);
-      const day = parseInt(match[1], 10);
-      const monthName = match[2].toLowerCase();
-      const month = monthNames[monthName];
-      if (!month) {
-        logger.warn(`parseReminder: Не удалось распознать месяц: "${monthName}"`);
-        return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Некорректный месяц' };
+      logger.info(`parseReminder: Совпадение с форматом день+утро/вечером: ${match}`);
+      const daySpec = match[1].toLowerCase();
+      const timeOfDay = match[2].toLowerCase();
+      const reminderText = match[3] ? match[3].trim() : null;
+      if (!reminderText) {
+        logger.warn(`parseReminder: ${errorMessages.missingText}: "${normalizedText}"`);
+        return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
       }
-      const hour = match[3] ? parseInt(match[3], 10) : now.hour;
-      const minute = match[3] ? (match[4] ? parseInt(match[4], 10) : 0) : now.minute;
-      if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
-        logger.warn(`parseReminder: Недопустимое время: ${hour}:${minute}`);
-        return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимое время (часы должны быть 0–23, минуты 0–59)' };
+      const settings = await UserSettings.findOne({ userId: chatId.toString() }) ||
+        { timezone: 'Europe/Moscow', morningTime: '8:00', eveningTime: '18:00' };
+      const userZone = settings.timezone;
+      const [morningHour, morningMinute] = settings.morningTime.split(':').map(Number);
+      const [eveningHour, eveningMinute] = settings.eveningTime.split(':').map(Number);
+      let hour, minute;
+      if (timeOfDay === 'утром') {
+        hour = morningHour;
+        minute = morningMinute;
+      } else {
+        hour = eveningHour;
+        minute = eveningMinute;
       }
-      let dt = DateTime.fromObject({ year: now.year, month, day, hour, minute, second: 0, millisecond: 0 }, { zone: MOSCOW_ZONE });
-      if (!dt.isValid) {
-        logger.warn(`parseReminder: Введена недопустимая дата: "${match[1]} ${match[2]}"`);
-        return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимая дата' };
+      let dt = now.setZone(userZone).set({ hour, minute, second: 0, millisecond: 0 });
+      const dayOffset = { 'сегодня': 0, 'завтра': 1, 'послезавтра': 2 }[daySpec];
+      dt = dt.plus({ days: dayOffset });
+      if (dt <= now) {
+        logger.warn(`parseReminder: ${errorMessages.timePassed}: ${dt.toISO()}`);
+        return { error: errorMessages.timePassed, datetime: null, reminderText: null, timeSpec: null, repeat: null };
       }
-      if (dt < now) {
-        dt = dt.plus({ years: 1 });
-      }
-      logger.info(`parseReminder: Абсолютная дата распознана: ${dt.toISO()}`);
+      logger.info(`parseReminder: Получена дата: ${dt.toISO()}`);
       return {
+        error: null,
         datetime: dt.toJSDate(),
-        reminderText: match[5] ? match[5].trim() : null,
-        timeSpec: `${day} ${match[2]} в ${hour}:${minute < 10 ? '0' + minute : minute}`,
+        reminderText,
+        timeSpec: `${daySpec} ${timeOfDay} в ${hour}:${minute < 10 ? '0' + minute : minute}`,
         repeat: null
       };
     }
     
-    // 1. Абсолютное событие по дню недели: "в среду в 10 завтрак" или "в 10 в среду завтрак"
-    match = normalizedText.match(absoluteWeekdayRegex);
-if (match) {
-  logger.info(`parseReminder: Совпадение с днем недели: ${match}`);
-  let hour = now.hour;
-  let minute = now.minute;
-
-  // Время перед днём недели (например, "в 10 в среду завтрак" или "в 10:30 в среду")
-  if (match[1]) {
-    if (match[1].length === 3 || match[1].length === 4) { // HHMM формат
-      hour = parseInt(match[1].slice(0, 2), 10) || now.hour;
-      minute = parseInt(match[1].slice(2), 10) || 0;
-    } else { // HH или HH:MM формат
-      hour = parseInt(match[1], 10) || now.hour;
-      minute = match[2] ? parseInt(match[2], 10) : 0;
+    // 1. Формат "утром/вечером" без указания дня (по умолчанию "завтра")
+    match = normalizedText.match(morningEveningRegex);
+    if (match) {
+      logger.info(`parseReminder: Совпадение с форматом утро/вечер: ${match}`);
+      const timeOfDay = match[1].toLowerCase();
+      const daySpec = match[2] ? match[2].toLowerCase() : 'завтра';
+      const reminderText = match[3] ? match[3].trim() : null;
+      if (!reminderText) {
+        logger.warn(`parseReminder: ${errorMessages.missingText}: "${normalizedText}"`);
+        return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      const settings = await UserSettings.findOne({ userId: chatId.toString() }) ||
+        { timezone: 'Europe/Moscow', morningTime: '8:00', eveningTime: '18:00' };
+      const userZone = settings.timezone;
+      const [morningHour, morningMinute] = settings.morningTime.split(':').map(Number);
+      const [eveningHour, eveningMinute] = settings.eveningTime.split(':').map(Number);
+      let hour, minute;
+      if (timeOfDay === 'утром') {
+        hour = morningHour;
+        minute = morningMinute;
+      } else {
+        hour = eveningHour;
+        minute = eveningMinute;
+      }
+      let dt = now.setZone(userZone).set({ hour, minute, second: 0, millisecond: 0 });
+      const dayOffset = { 'сегодня': 0, 'завтра': 1, 'послезавтра': 2 }[daySpec];
+      dt = dt.plus({ days: dayOffset });
+      if (dt <= now) {
+        logger.warn(`parseReminder: ${errorMessages.timePassed}: ${dt.toISO()}`);
+        return { error: errorMessages.timePassed, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      logger.info(`parseReminder: Получена дата: ${dt.toISO()}`);
+      return {
+        error: null,
+        datetime: dt.toJSDate(),
+        reminderText,
+        timeSpec: `${timeOfDay} ${daySpec} в ${hour}:${minute < 10 ? '0' + minute : minute}`,
+        repeat: null
+      };
     }
-  }
-  // Время после дня недели (например, "в среду в 1030" или "в среду в 10:30")
-  else if (match[4]) {
-    const timeStr = match[4].trim();
-    if (/^\d{3,4}$/.test(timeStr)) { // HHMM формат
-      hour = parseInt(timeStr.slice(0, 2), 10) || now.hour;
-      minute = parseInt(timeStr.slice(2), 10) || 0;
-    } else if (timeStr.includes(':') || timeStr.includes('.')) { // HH:MM формат
-      const timeParts = timeStr.split(/[.:]/);
-      hour = parseInt(timeParts[0], 10) || now.hour;
-      minute = timeParts[1] ? parseInt(timeParts[1], 10) : 0;
-    } else { // Только часы
-      hour = parseInt(timeStr, 10) || now.hour;
-      minute = 0;
-    }
-  }
-
-  if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
-    logger.warn(`parseReminder: Недопустимое время: ${hour}:${minute}`);
-    return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимое время (часы должны быть 0–23, минуты 0–59)' };
-  }
-
-  // День недели всегда в match[3]
-  let weekday = match[3]; // match[3] теперь день недели
-  if (!weekday) {
-    logger.warn(`parseReminder: День недели не найден в match: ${JSON.stringify(match)}`);
-    return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимый день недели' };
-  }
-  weekday = weekday.toLowerCase();
-  const normalizedWeekday = normalizeWord(weekday);
-  const target = dayNameToWeekday[normalizedWeekday];
-  if (!target) {
-    logger.warn(`parseReminder: Недопустимый день недели: ${weekday}`);
-    return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимый день недели' };
-  }
-
-  let dt = now;
-  let iterations = 0;
-  const maxIterations = 7;
-  while (dt.weekday !== target && iterations < maxIterations) {
-    dt = dt.plus({ days: 1 });
-    iterations++;
-  }
-  if (iterations >= maxIterations) {
-    logger.error(`parseReminder: Бесконечный цикл при поиске дня недели: ${normalizedWeekday}`);
-    return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Ошибка при определении дня недели' };
-  }
-  dt = dt.set({ hour, minute, second: 0, millisecond: 0 });
-  if (dt <= now) {
-    dt = dt.plus({ weeks: 1 });
-  }
-
-  const reminderText = match[5] ? match[5].trim() : null; // match[5] теперь текст напоминания
-  logger.info(`parseReminder: День недели распознан: ${dt.toISO()}`);
-  return {
-    datetime: dt.toJSDate(),
-    reminderText,
-    timeSpec: `${normalizedWeekday} в ${hour}:${minute < 10 ? '0' + minute : minute}`,
-    repeat: null
-  };
-}
     
-    // 2. Повторяющееся уведомление: "каждый четверг в 11 вопросы" или "каждый день в 2130 рыбки"
+    // 2. Абсолютная дата с повторением, например "17 апреля каждый год днюха"
+    match = normalizedText.match(absoluteDateRegex);
+    if (match) {
+      logger.info(`parseReminder: Совпадение с абсолютной датой: ${match}`);
+      const day = parseInt(match[1], 10);
+      const rawMonthName = match[2].toLowerCase();
+      const month = monthNames[rawMonthName];
+      if (!month) {
+        logger.warn(`parseReminder: ${errorMessages.invalidMonth}: "${rawMonthName}"`);
+        return { error: errorMessages.invalidMonth, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      let hour = now.hour;
+      let minute = now.minute;
+      if (match[3]) {
+        const parsed = parseTimeString(match[3]);
+        hour = parsed.hour;
+        minute = parsed.minute;
+      }
+      if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
+        logger.warn(`parseReminder: ${errorMessages.invalidTime}: ${hour}:${minute}`);
+        return { error: errorMessages.invalidTime, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      let dt = DateTime.fromObject({ year: now.year, month, day, hour, minute, second: 0, millisecond: 0 }, { zone: MOSCOW_ZONE });
+      if (!dt.isValid) {
+        logger.warn(`parseReminder: ${errorMessages.invalidDate}: "${match[1]} ${match[2]}"`);
+        return { error: errorMessages.invalidDate, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      let repeat = null;
+      let reminderText = match[6] ? match[6].trim() : null;
+      if (match[4] || match[5]) {
+        const multiplier = match[4] ? parseInt(match[4], 10) : 1;
+        let periodUnit = fuzzyCorrectUnit(match[5] || '').toLowerCase();
+        periodUnit = normalizeWord(periodUnit);
+        const validRepeatUnits = ['минута', 'час', 'день', 'неделя', 'месяц', 'год'];
+        if (validRepeatUnits.includes(periodUnit)) {
+          const correctUnit = multiplier === 1 ? periodUnit : getDeclension(periodUnit, multiplier);
+          repeat = multiplier === 1 ? `каждый ${correctUnit}` : `каждые ${multiplier} ${correctUnit}`;
+        }
+      }
+      if (dt < now) {
+        dt = repeat && repeat.includes('год') ? dt.plus({ years: 1 }) : dt.plus({ days: 1 });
+      }
+      if (!reminderText) {
+        logger.warn(`parseReminder: ${errorMessages.missingText}: "${normalizedText}"`);
+        return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      logger.info(`parseReminder: Абсолютная дата распознана: ${dt.toISO()} с повторением: ${repeat}`);
+      return {
+        error: null,
+        datetime: dt.toJSDate(),
+        reminderText,
+        timeSpec: `${day} ${rawMonthName} в ${hour}:${minute < 10 ? '0' + minute : minute}`,
+        repeat
+      };
+    }
+    
+    // 3. Ежемесячное событие: "каждый месяц 15 числа зарплата"
+    match = normalizedText.match(monthlyDayRegex);
+    if (match) {
+      logger.info(`parseReminder: Совпадение с ежемесячным событием: ${match}`);
+      const dayOfMonth = parseInt(match[1], 10);
+      if (dayOfMonth < 1 || dayOfMonth > 31) {
+        logger.warn(`parseReminder: Некорректное число месяца: "${dayOfMonth}" в тексте: "${normalizedText}"`);
+        return { error: errorMessages.invalidDate, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      const timeString = match[3];
+      const reminderText = match[4] ? match[4].trim() : null;
+      if (!reminderText) {
+        logger.warn(`parseReminder: ${errorMessages.missingText} в ежемесячном формате: "${normalizedText}"`);
+        return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      let dt = now.set({ day: dayOfMonth, second: 0, millisecond: 0 });
+      if (timeString) {
+        const parsed = parseTimeString(timeString);
+        dt = dt.set({ hour: parsed.hour, minute: parsed.minute });
+      }
+      if (dt <= now) dt = dt.plus({ months: 1 });
+      logger.info(`parseReminder: Ежемесячное уведомление распознано: ${dt.toISO()}`);
+      return {
+        error: null,
+        datetime: dt.toJSDate(),
+        reminderText,
+        timeSpec: `каждый месяц ${dayOfMonth} числа${timeString ? ' в ' + dt.toFormat('HH:mm') : ''}`,
+        repeat: 'каждый месяц'
+      };
+    }
+    
+    // 4. Повторяющееся уведомление (общий случай), например "каждые 30 минут проверка" или "каждый год 17 апреля днюха"
     match = normalizedText.match(repeatRegex);
     if (match) {
       logger.info(`parseReminder: Совпадение с повторяющимся уведомлением: ${match}`);
       const multiplier = match[1] ? parseInt(match[1], 10) : 1;
       let periodUnitRaw = match[2];
-      let periodUnit = fuzzyCorrectUnit(periodUnitRaw);
+      let periodUnit = fuzzyCorrectUnit(periodUnitRaw).toLowerCase();
       periodUnit = normalizeWord(periodUnit);
-      const validRepeatUnits = ['минута', 'час', 'день', 'неделя', 'месяц', 'год', ...Object.keys(dayNameToWeekday)];
+      const validRepeatUnits = ['минута', 'час', 'день', 'неделя', 'месяц', 'год'];
       if (!validRepeatUnits.includes(periodUnit)) {
-        logger.warn(`parseReminder: Недопустимая единица повторения: ${periodUnit}`);
-        return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимая единица повторения' };
+        logger.warn(`parseReminder: ${errorMessages.invalidRepeatUnit}: ${periodUnit}`);
+        return { error: errorMessages.invalidRepeatUnit, datetime: null, reminderText: null, timeSpec: null, repeat: null };
       }
       const correctUnit = multiplier === 1 ? periodUnit : getDeclension(periodUnit, multiplier);
-      const reminderText = match[5] ? match[5].trim() : null;
-      const repeatValue = multiplier === 1 ? periodUnit : `${multiplier} ${correctUnit}`;
-
-      let hour, minute;
-      if (match[3]) {
-        const timeStr = match[3];
-        if (timeStr.length === 3 || timeStr.length === 4) { // HHMM формат
-          hour = parseInt(timeStr.slice(0, 2), 10) || 0;
-          minute = parseInt(timeStr.slice(2), 10) || 0;
-        } else if (timeStr.includes(':') || timeStr.includes('.')) { // HH:MM формат
-          const timeParts = timeStr.split(/[.:]/);
-          hour = parseInt(timeParts[0], 10) || 0;
-          minute = parseInt(timeParts[1], 10) || 0;
-        } else { // Только часы
-          hour = parseInt(timeStr, 10) || 0;
-          minute = match[4] ? parseInt(match[4], 10) : 0;
+      const repeatValue = multiplier === 1 ? `каждый ${correctUnit}` : `каждые ${multiplier} ${correctUnit}`;
+      let hour = now.hour;
+      let minute = now.minute;
+      let day = now.day;
+      let month = now.month;
+      if (match[3] && match[4]) {
+        day = parseInt(match[3], 10);
+        const rawMonthName = match[4].toLowerCase();
+        month = monthNames[rawMonthName];
+        if (!month) {
+          logger.warn(`parseReminder: ${errorMessages.invalidMonth}: "${rawMonthName}"`);
+          return { error: errorMessages.invalidMonth, datetime: null, reminderText: null, timeSpec: null, repeat: null };
         }
-        if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
-          logger.warn(`parseReminder: Недопустимое время: ${hour}:${minute}`);
-          return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимое время (часы должны быть 0–23, минуты 0–59)' };
-        }
-      } else {
-        hour = now.hour;
-        minute = now.minute;
       }
-
-      let dt;
-      if (dayNameToWeekday[periodUnit]) {
-        const targetWeekday = dayNameToWeekday[periodUnit];
-        dt = now;
-        let iterations = 0;
-        const maxIterations = 7;
-        while (dt.weekday !== targetWeekday && iterations < maxIterations) {
-          dt = dt.plus({ days: 1 });
-          iterations++;
-        }
-        if (iterations >= maxIterations) {
-          logger.error(`parseReminder: Бесконечный цикл при поиске дня недели: ${periodUnit}`);
-          return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Ошибка при определении дня недели' };
-        }
-        dt = dt.set({ hour, minute, second: 0, millisecond: 0 });
-        if (dt <= now) {
-          dt = dt.plus({ weeks: 1 });
-        }
-      } else {
-        dt = now.set({ hour, minute, second: 0, millisecond: 0 });
-        if (dt <= now) {
+      if (match[5]) {
+        const parsed = parseTimeString(match[5]);
+        hour = parsed.hour;
+        minute = parsed.minute;
+      }
+      if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
+        logger.warn(`parseReminder: ${errorMessages.invalidTime}: ${hour}:${minute}`);
+        return { error: errorMessages.invalidTime, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
+      if (day && month) {
+        dt = dt.set({ day, month });
+        if (dt.year < now.year) dt = dt.plus({ years: 1 });
+      }
+      if (dt <= now) {
+        if (periodUnit === 'минута') {
+          dt = now.plus({ minutes: multiplier });
+        } else if (periodUnit === 'час') {
+          dt = now.plus({ hours: multiplier });
+        } else {
           const periodMap = {
-            'минута': 'minutes',
-            'час': 'hours',
             'день': 'days',
             'неделя': 'weeks',
             'месяц': 'months',
             'год': 'years'
           };
-          if (periodMap[periodUnit]) {
-            dt = dt.plus({ [periodMap[periodUnit]]: multiplier });
-          } else {
-            dt = dt.plus({ days: 1 });
-          }
+          dt = dt.plus({ [periodMap[periodUnit]]: multiplier });
         }
       }
-
-      logger.info(`parseReminder: Повторяющееся уведомление: ${dt.toFormat('HH:mm')}`);
+      const rText = match[6] ? match[6].trim() : null;
+      if (!rText) {
+        logger.warn(`parseReminder: ${errorMessages.missingText} для повторяющегося события: "${normalizedText}"`);
+        return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      logger.info(`parseReminder: Повторяющееся уведомление: ${dt.toFormat('HH:mm d MMMM yyyy')}`);
+      // Если день и месяц заданы, используем rawMonthName для вывода
+      let timeSpec;
+      if (match[3] && match[4]) {
+        timeSpec = `${repeatValue} ${parseInt(match[3], 10)} ${match[4].toLowerCase()} в ${hour}:${minute < 10 ? '0' + minute : minute}`;
+      } else {
+        timeSpec = `${repeatValue} в ${hour}:${minute < 10 ? '0' + minute : minute}`;
+      }
       return {
+        error: null,
         datetime: dt.toJSDate(),
-        reminderText,
-        timeSpec: `каждый ${repeatValue} в ${hour}:${minute < 10 ? '0' + minute : minute}`,
+        reminderText: rText,
+        timeSpec,
         repeat: repeatValue
       };
     }
     
-    // 3. Разовое уведомление "через ..." 
+    // 5. Формат разового уведомления "через ..." – если обнаружено абсолютное время, выдаём ошибку
     match = normalizedText.match(throughRegex);
     if (match) {
-      logger.info(`parseReminder: Совпадение с разовым уведомлением: ${match}`);
+      logger.info(`parseReminder: Совпадение с форматом "через ...": ${match}`);
+      if (match[3]) {
+        logger.warn(`parseReminder: ${errorMessages.complexTime}: "${normalizedText}"`);
+        return { error: errorMessages.complexTime, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
       const number = match[1] ? parseFloat(match[1]) : 1;
       if (number <= 0) {
-        logger.warn(`parseReminder: Длительность должна быть положительной: "${normalizedText}"`);
-        return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Длительность должна быть положительной' };
+        logger.warn(`parseReminder: ${errorMessages.nonPositiveDuration}: "${normalizedText}"`);
+        return { error: errorMessages.nonPositiveDuration, datetime: null, reminderText: null, timeSpec: null, repeat: null };
       }
       let unit = fuzzyCorrectUnit(match[2].toLowerCase());
-      const reminderText = match[5] ? match[5].trim() : null;
+      const rText = match[4] ? match[4].trim() : null;
       const unitMap = {
         'минута': 'minutes', 'минуты': 'minutes', 'минут': 'minutes', 'минуту': 'minutes',
         'час': 'hours', 'часа': 'hours', 'часов': 'hours', 'часу': 'hours',
@@ -425,213 +434,234 @@ if (match) {
       };
       const durationKey = unitMap[unit] || 'minutes';
       let dt = now.plus({ [durationKey]: number });
-      if (match[3]) {
-        const hour = parseInt(match[3], 10) || 0;
-        const minute = match[4] ? parseInt(match[4], 10) : 0;
-        if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
-          logger.warn(`parseReminder: Недопустимое время: ${hour}:${minute}`);
-          return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимое время (часы должны быть 0–23, минуты 0–59)' };
-        }
-        dt = dt.set({ hour, minute, second: 0, millisecond: 0 });
-      }
-      if (!reminderText) {
+      if (!rText) {
         logger.info(`parseReminder: Разовое уведомление без текста: ${dt.toISO()}`);
         return {
+          error: null,
           datetime: dt.toJSDate(),
           reminderText: null,
-          timeSpec: `через ${number} ${unit}${match[3] ? ` в ${match[3]}:${match[4] ? match[4].padStart(2, '0') : '00'}` : ''}`,
+          timeSpec: `через ${number} ${unit}`,
           repeat: null
         };
       }
       logger.info(`parseReminder: Разовое уведомление: ${dt.toISO()}`);
       return {
+        error: null,
         datetime: dt.toJSDate(),
-        reminderText,
-        timeSpec: `через ${number} ${unit}${match[3] ? ` в ${match[3]}:${match[4] ? match[4].padStart(2, '0') : '00'}` : ''}`,
+        reminderText: rText,
+        timeSpec: `через ${number} ${unit}`,
         repeat: null
       };
     }
     
-    // 4. "сегодня/завтра/послезавтра ..." 
+    // 6. Формат "сегодня/завтра/послезавтра" с необязательным временем
     match = normalizedText.match(todayTomorrowRegex);
     if (match) {
-      logger.info(`parseReminder: Совпадение с ${match[1]}: ${match}`);
+      logger.info(`parseReminder: Совпадение с форматом сегодня/завтра/послезавтра: ${match}`);
       const dayOffset = { 'сегодня': 0, 'завтра': 1, 'послезавтра': 2 }[match[1].toLowerCase()];
-      const hour = match[2] ? parseInt(match[2], 10) : now.hour;
-      const minute = match[3] ? parseInt(match[3], 10) : 0;
-      if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
-        logger.warn(`parseReminder: Недопустимое время: ${hour}:${minute}`);
-        return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимое время (часы должны быть 0–23, минуты 0–59)' };
+      let hour = now.hour;
+      let minute = now.minute;
+      if (match[2]) {
+        const parsed = parseTimeString(match[2]);
+        hour = parsed.hour;
+        minute = parsed.minute;
       }
-      const reminderText = match[4] ? match[4].trim() : null;
+      if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
+        logger.warn(`parseReminder: ${errorMessages.invalidTime}: ${hour}:${minute}`);
+        return { error: errorMessages.invalidTime, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
+      const rText = match[3] ? match[3].trim() : null;
+      if (!rText) {
+        logger.warn(`parseReminder: ${errorMessages.missingText}: "${normalizedText}"`);
+        return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
       let dt = now.plus({ days: dayOffset }).set({ hour, minute, second: 0, millisecond: 0 });
       if (dt <= now) {
-        dt = dt.plus({ days: 1 });
+        logger.warn(`parseReminder: ${errorMessages.timePassed}: ${dt.toISO()}`);
+        return { error: errorMessages.timePassed, datetime: null, reminderText: null, timeSpec: null, repeat: null };
       }
-      logger.info(`${match[1]}шняя дата: ${dt.toISO()}`);
+      logger.info(`parseReminder: Получена дата: ${dt.toISO()}`);
       return {
+        error: null,
         datetime: dt.toJSDate(),
-        reminderText,
+        reminderText: rText,
         timeSpec: `${match[1]} в ${hour}:${minute < 10 ? '0' + minute : minute}`,
         repeat: null
       };
     }
     
-    // 5. Формат с разделителем: "в 10:15 обед" (включая варианты с точкой)
-    let timeWithSeparatorRegex = /^в\s*(\d{1,2})\s*[:.,;\/]\s*(\d{1,2})\s+(.+)/i;
+    // 7. Форматы с разделителем: "в 10:15 обед"
+    let timeWithSeparatorRegex = regexps.timeWithDotRegex;
     match = normalizedText.match(timeWithSeparatorRegex);
     if (match) {
-      logger.info(`parseReminder: Совпадение с временем с разделителем: ${match}`);
+      logger.info(`parseReminder: Совпадение с форматом с разделителем: ${match}`);
       const hour = parseInt(match[1], 10) || 0;
       const minute = parseInt(match[2], 10) || 0;
       if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
-        logger.warn(`parseReminder: Недопустимое время: ${hour}:${minute}`);
-        return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимое время (часы должны быть 0–23, минуты 0–59)' };
+        logger.warn(`parseReminder: ${errorMessages.invalidTime}: ${hour}:${minute}`);
+        return { error: errorMessages.invalidTime, datetime: null, reminderText: null, timeSpec: null, repeat: null };
       }
-      const reminderText = match[3] ? match[3].trim() : null;
+      const rText = match[3] ? match[3].trim() : null;
+      if (!rText) {
+        logger.warn(`parseReminder: ${errorMessages.missingText}: "${normalizedText}"`);
+        return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
       let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
       if (dt <= now) dt = dt.plus({ days: 1 });
-      logger.info(`parseReminder: Время с разделителем: ${dt.toISO()}`);
+      logger.info(`parseReminder: Получена дата: ${dt.toISO()}`);
       return {
+        error: null,
         datetime: dt.toJSDate(),
-        reminderText,
+        reminderText: rText,
         timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
         repeat: null
       };
     }
     
-    // 6. Формат числовой без разделителя: "в 1015 уборка" или "в 2130 каждый день рыбки"
-    match = normalizedText.match(timeNumericRegex);
+    // 8. Формат числовой без разделителя: "в1015 уборка"
+    match = normalizedText.match(regexps.timeNumericRegex);
     if (match) {
-      logger.info(`parseReminder: Совпадение с числовым временем: ${match}`);
-      let timeStr = match[1];
+      logger.info(`parseReminder: Совпадение с числовым форматом: ${match}`);
+      let timeNum = match[1];
       let hour, minute;
-      if (timeStr.length === 3 || timeStr.length === 4) { // HHMM формат
-        hour = parseInt(timeStr.slice(0, 2), 10) || 0;
-        minute = parseInt(timeStr.slice(2), 10) || 0;
-      } else if (timeStr.includes(':') || timeStr.includes('.')) { // HH:MM формат
-        const timeParts = timeStr.split(/[.:]/);
-        hour = parseInt(timeParts[0], 10) || 0;
-        minute = parseInt(timeParts[1], 10) || 0;
+      if (timeNum.length === 3) {
+        hour = parseInt(timeNum.slice(0, 1), 10) || 0;
+        minute = parseInt(timeNum.slice(1), 10) || 0;
+      } else {
+        hour = parseInt(timeNum.slice(0, 2), 10) || 0;
+        minute = parseInt(timeNum.slice(2), 10) || 0;
       }
       if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
-        logger.warn(`parseReminder: Недопустимое числовое время: ${hour}:${minute}`);
-        return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимое время (часы должны быть 0–23, минуты 0–59)' };
+        logger.warn(`parseReminder: ${errorMessages.invalidTime}: ${hour}:${minute}`);
+        return { error: errorMessages.invalidTime, datetime: null, reminderText: null, timeSpec: null, repeat: null };
       }
-
-      // Проверка на повторение
-      if (match[2] && match[2].toLowerCase().startsWith('кажд')) {
-        const multiplier = match[3] ? parseInt(match[3], 10) : 1;
-        let periodUnit = fuzzyCorrectUnit(match[4]).toLowerCase();
+      const remainingText = match[2].trim();
+      let rText = remainingText;
+      let repeat = null;
+      const repeatMatch = remainingText.match(regexps.repeatRegex);
+      if (repeatMatch) {
+        logger.info(`parseReminder: Обнаружено повторение после числового формата: ${repeatMatch}`);
+        const multiplier = repeatMatch[1] ? parseInt(repeatMatch[1], 10) : 1;
+        let periodUnit = fuzzyCorrectUnit(repeatMatch[2]).toLowerCase();
         periodUnit = normalizeWord(periodUnit);
-        const validRepeatUnits = ['минута', 'час', 'день', 'неделя', 'месяц', 'год', ...Object.keys(dayNameToWeekday)];
+        const validRepeatUnits = ['минута', 'час', 'день', 'неделя', 'месяц', 'год'];
         if (!validRepeatUnits.includes(periodUnit)) {
-          logger.warn(`parseReminder: Недопустимая единица повторения: ${periodUnit}`);
-          return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимая единица повторения' };
+          logger.warn(`parseReminder: ${errorMessages.invalidRepeatUnit}: ${periodUnit}`);
+          return { error: errorMessages.invalidRepeatUnit, datetime: null, reminderText: null, timeSpec: null, repeat: null };
         }
         const correctUnit = multiplier === 1 ? periodUnit : getDeclension(periodUnit, multiplier);
-        const reminderText = match[5] ? match[5].trim() : "";
-        const repeatValue = multiplier === 1 ? periodUnit : `${multiplier} ${correctUnit}`;
-
+        rText = (repeatMatch[3] && repeatMatch[3].trim()) || null;
+        if (!rText) {
+          logger.warn(`parseReminder: ${errorMessages.missingText} для повторения: "${normalizedText}"`);
+          return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+        }
+        repeat = multiplier === 1 ? `каждый ${correctUnit}` : `каждые ${multiplier} ${correctUnit}`;
         let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
         if (dt <= now) {
-          const periodMap = {
-            'минута': 'minutes',
-            'час': 'hours',
-            'день': 'days',
-            'неделя': 'weeks',
-            'месяц': 'months',
-            'год': 'years'
-          };
-          if (periodMap[periodUnit]) {
-            dt = dt.plus({ [periodMap[periodUnit]]: multiplier });
-          } else if (dayNameToWeekday[periodUnit]) {
-            const targetWeekday = dayNameToWeekday[periodUnit];
-            while (dt.weekday !== targetWeekday) {
-              dt = dt.plus({ days: 1 });
-            }
-            if (dt <= now) {
-              dt = dt.plus({ weeks: 1 });
-            }
+          if (periodUnit === 'минута') {
+            dt = now.plus({ minutes: multiplier });
+          } else if (periodUnit === 'час') {
+            dt = now.plus({ hours: multiplier });
           } else {
-            dt = dt.plus({ days: 1 });
+            const periodMap = {
+              'день': 'days',
+              'неделя': 'weeks',
+              'месяц': 'months',
+              'год': 'years'
+            };
+            dt = dt.plus({ [periodMap[periodUnit]]: multiplier });
           }
         }
-
-        logger.info(`parseReminder: Повторяющееся уведомление: ${dt.toFormat('HH:mm')}`);
+        logger.info(`parseReminder: Повторяющееся уведомление (числовой формат): ${dt.toFormat('HH:mm')}`);
         return {
+          error: null,
           datetime: dt.toJSDate(),
-          reminderText,
-          timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute} каждый ${repeatValue}`,
-          repeat: repeatValue
+          reminderText: rText,
+          timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute} ${repeat}`,
+          repeat
         };
       }
-
-      // Разовое напоминание
-      const reminderText = match[6] ? match[6].trim() : "";
+      if (!rText) {
+        logger.warn(`parseReminder: ${errorMessages.missingText}: "${normalizedText}"`);
+        return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
       let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
       if (dt <= now) dt = dt.plus({ days: 1 });
-      logger.info(`parseReminder: Числовое время (разовое): ${dt.toISO()}`);
+      logger.info(`parseReminder: Числовой формат (разовое уведомление): ${dt.toISO()}`);
       return {
+        error: null,
         datetime: dt.toJSDate(),
-        reminderText,
+        reminderText: rText,
         timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
         repeat: null
       };
     }
     
-    // 7. Формат с пробелом между часами и минутами: "в 10 15 ужин"
-    match = normalizedText.match(timeWithSpaceRegex);
+    // 9. Формат с пробелом: "в 10 15 ужин"
+    match = normalizedText.match(regexps.timeWithSpaceRegex);
     if (match) {
-      logger.info(`parseReminder: Совпадение с временем с пробелом: ${match}`);
+      logger.info(`parseReminder: Совпадение с форматом с пробелом: ${match}`);
       const hour = parseInt(match[1], 10) || 0;
       const minute = parseInt(match[2], 10) || 0;
       if (isNaN(hour) || isNaN(minute) || hour > 23 || minute > 59) {
-        logger.warn(`parseReminder: Недопустимое время: ${hour}:${minute}`);
-        return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимое время (часы должны быть 0–23, минуты 0–59)' };
+        logger.warn(`parseReminder: ${errorMessages.invalidTime}: ${hour}:${minute}`);
+        return { error: errorMessages.invalidTime, datetime: null, reminderText: null, timeSpec: null, repeat: null };
       }
-      const reminderText = match[3] ? match[3].trim() : null;
+      const rText = (match[3] && match[3].trim()) || null;
+      if (!rText) {
+        logger.warn(`parseReminder: ${errorMessages.missingText}: "${normalizedText}"`);
+        return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
       let dt = now.set({ hour, minute, second: 0, millisecond: 0 });
       if (dt <= now) dt = dt.plus({ days: 1 });
-      logger.info(`parseReminder: Время с пробелом: ${dt.toISO()}`);
+      logger.info(`parseReminder: Формат с пробелом распознан: ${dt.toISO()}`);
       return {
+        error: null,
         datetime: dt.toJSDate(),
-        reminderText,
+        reminderText: rText,
         timeSpec: `в ${hour}:${minute < 10 ? '0' + minute : minute}`,
         repeat: null
       };
     }
     
-    // 8. Простое время без минут: "в 17 ужин"
-    match = normalizedText.match(simpleTimeRegex);
+    // 10. Fallback: формат "в 17 ужин"
+    match = normalizedText.match(regexps.simpleTimeRegex);
     if (match) {
-      logger.info(`parseReminder: Совпадение с простым временем: ${match}`);
+      logger.info(`parseReminder: Совпадение с простым форматом: ${match}`);
       const hour = parseInt(match[1], 10) || 0;
       if (isNaN(hour) || hour > 23) {
-        logger.warn(`parseReminder: Недопустимое время: ${hour}:00`);
-        return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Недопустимое время (часы должны быть 0–23)' };
+        logger.warn(`parseReminder: ${errorMessages.invalidTime}: ${hour}:00`);
+        return { error: errorMessages.invalidTime, datetime: null, reminderText: null, timeSpec: null, repeat: null };
       }
-      const reminderText = match[2] ? match[2].trim() : null;
+      const rText = (match[2] && match[2].trim()) || null;
+      if (!rText) {
+        logger.warn(`parseReminder: ${errorMessages.missingText}: "${normalizedText}"`);
+        return { error: errorMessages.missingText, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+      }
       let dt = now.set({ hour, minute: 0, second: 0, millisecond: 0 });
       if (dt <= now) dt = dt.plus({ days: 1 });
+      logger.info(`parseReminder: Простой формат распознан: ${dt.toISO()}`);
       return {
+        error: null,
         datetime: dt.toJSDate(),
-        reminderText,
+        reminderText: rText,
         timeSpec: `в ${hour}:00`,
         repeat: null
       };
     }
     
-    logger.warn(`parseReminder: Не удалось распознать входной текст: "${normalizedText}"`);
-    return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: 'Не удалось распознать формат напоминания' };
+    logger.warn(`parseReminder: ${errorMessages.unknownFormat}: "${normalizedText}"`);
+    return { error: errorMessages.unknownFormat, datetime: null, reminderText: null, timeSpec: null, repeat: null };
+    
   } catch (error) {
     logger.error(`parseReminder: Ошибка обработки текста "${text}": ${error.message}`);
-    return { datetime: null, reminderText: null, timeSpec: null, repeat: null, error: `Произошла ошибка: ${error.message}` };
+    return { error: `Произошла ошибка: ${error.message}`, datetime: null, reminderText: null, timeSpec: null, repeat: null };
   }
 }
 
 module.exports = {
   normalizeWord,
+  parseTimeString,
   normalizeTimeExpressions,
   parseDate,
   parseReminder,
