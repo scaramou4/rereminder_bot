@@ -146,3 +146,6 @@ allJobsAgenda.js
 .gitignore
 exportedReminders.json
 agendaJobs.json
+
+# Не отслеживать всю директорию с тест-скриптами
+/ __tests__ /
