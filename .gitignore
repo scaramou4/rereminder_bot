@@ -148,4 +148,5 @@ exportedReminders.json
 agendaJobs.json
 
 # Не отслеживать всю директорию с тест-скриптами
-/ __tests__ /
+__tests__
+
